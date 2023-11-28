@@ -6,10 +6,45 @@ use httparse::Status::*;
 use colored::*;
 use minreq::{Method, Request, Response};
 use serde_json::Value;
+use toml::Table;
+
+// √ HTTP Request files
+// √ Show stylized response
+// √ Save response for reference
+// √ Toml config with sections
+// - Generalized variable substitution
+// - Verbosity control
+// - Select scope
+// - Structured code
+// - Structured storage
+// - High performance
+// - Enterprise cloud server
+// - Workflows
+// - Interactive mode?
+// - HTTP cookes?
 
 fn main() -> Result<(), Box<dyn Error>> {
     let args: Vec<String> = env::args().collect();
     let file_path = &args[1];
+
+    let config = match fs::read_to_string("hittup.toml") {
+        Ok(cfg) => {
+            toml::from_str::<Table>(&cfg)?
+        },
+        Err(_) => {
+            panic!("hittup.toml not found");
+        },
+    };
+
+    let section = match config.get("default") {
+        Some(v) => match v {
+            toml::Value::Table(t) => t,
+            _ => panic!("`dafault` has unexpected type in config"),
+        },
+        _ => panic!("`dafault` not found in config"),
+    };
+
+    println!("{:?}", config);
 
     let buf = fs::read(file_path)?;
 
@@ -32,7 +67,15 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let body = &buf[offset..];
 
-    let mut request = Request::new(to_method(method), path.to_string())
+    let newpath = path.replace("{{baseUrl}}", match section.get("baseUrl") {
+        Some(v) => match v {
+            toml::Value::String(url) => url,
+            _ => panic!("baseUrl not recognized"),
+        },
+        None => panic!("baseUrl not found"),
+    });
+
+    let mut request = Request::new(to_method(method), newpath.to_string())
         .with_body(body);
 
     for header in req.headers {
@@ -41,7 +84,14 @@ fn main() -> Result<(), Box<dyn Error>> {
             Some(ref t) => original.replace("{{token}}", &t),
             None => original.to_string(),
         };
-        request = request.with_header(String::from(header.name), value);
+        let value2 = value.replace("{{baseUrl}}", match section.get("baseUrl") {
+            Some(v) => match v {
+                toml::Value::String(url) => url,
+                _ => panic!("baseUrl not recognized"),
+            },
+            None => panic!("baseUrl not found"),
+        });
+        request = request.with_header(String::from(header.name), value2);
     }
 
     let response = request.send()?;
