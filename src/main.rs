@@ -1,5 +1,6 @@
 use std::fs;
 use std::str;
+use std::env;
 use std::error::Error;
 use httparse::Status::*;
 use colored::*;
@@ -7,9 +8,12 @@ use minreq::{Method, Request, Response};
 use serde_json::Value;
 
 fn main() -> Result<(), Box<dyn Error>> {
-    let file_path = "test.http";
+    let args: Vec<String> = env::args().collect();
+    let file_path = &args[1];
 
     let buf = fs::read(file_path)?;
+
+    let token = fs::read_to_string(".token").ok();
 
     let mut headers = [httparse::EMPTY_HEADER; 64];
     let mut req = httparse::Request::new(&mut headers);
@@ -32,7 +36,12 @@ fn main() -> Result<(), Box<dyn Error>> {
         .with_body(body);
 
     for header in req.headers {
-        request = request.with_header(header.name.to_string(), str::from_utf8(header.value)?);
+        let original = str::from_utf8(header.value)?;
+        let value = match token {
+            Some(ref t) => original.replace("{{token}}", &t),
+            None => original.to_string(),
+        };
+        request = request.with_header(String::from(header.name), value);
     }
 
     let response = request.send()?;
@@ -43,18 +52,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 }
 
 fn to_method(input: &str) -> Method {
-    match input {
-        "GET" => Method::Get,
-        "POST" => Method::Post,
-        "HEAD" => Method::Head,
-        "PUT" => Method::Put,
-        "DELETE" => Method::Delete,
-        "CONNECT" => Method::Connect,
-        "OPTIONS" => Method::Options,
-        "TRACE" => Method::Trace,
-        "PATCH" => Method::Patch,
-        s => Method::Custom(s.to_string()),
-    }
+    Method::Custom(input.to_uppercase())
 }
 
 fn print_response(res: &Response) -> Result<(), Box<dyn Error>> {
@@ -67,13 +65,17 @@ fn print_response(res: &Response) -> Result<(), Box<dyn Error>> {
     }
 
     println!("{}", head.dimmed());
-    println!();
 
     // FIXME Check if content type is JSON
 
     let json: Value = res.json()?;
 
     println!("{}", serde_json::to_string_pretty(&json)?);
+
+    if json["AccessToken"].is_string() {
+        let token = json["AccessToken"].as_str();
+        fs::write(".token", token.unwrap())?;
+    }
 
     Ok(())
 }
