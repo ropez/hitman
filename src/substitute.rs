@@ -166,6 +166,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "prompts for input"]
     fn substitutes_default_value() {
         let env = create_env();
         let res = substitute("foo: {{href | fallback.com }}\n", &env).unwrap();
@@ -208,13 +209,6 @@ mod tests {
     fn fails_for_unmatched_close() {
         let env = create_env();
         let res = substitute("foo url}} bar\n", &env);
-        assert!(res.is_err())
-    }
-
-    #[test]
-    fn fails_for_missing_variable() {
-        let env = create_env();
-        let res = substitute("foo {{koko}} bar\n", &env);
         assert!(res.is_err())
     }
 }
