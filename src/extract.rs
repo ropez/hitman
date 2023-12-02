@@ -1,19 +1,6 @@
-use std::fs;
-use std::str;
-use std::fmt;
-use std::error::Error;
 use toml::{Table, Value};
-use serde_json::{Value as JsonValue};
 use jsonpath::Selector;
-use substitute::substitute;
-
-mod substitute;
-
-pub fn load(path: &str, section: &Table) -> Result<String, Box<dyn Error>> {
-    let buf = fs::read_to_string(path)?;
-
-    Ok(substitute(&buf, section)?)
-}
+use serde_json::Value as JsonValue;
 
 pub fn extract_variables(data: &JsonValue, scope: &Table) -> Result<Table, ()> {
     let mut out = Table::new();
@@ -39,19 +26,8 @@ pub fn extract_variables(data: &JsonValue, scope: &Table) -> Result<Table, ()> {
     Ok(out)
 }
 
-#[derive(Debug, Clone)]
-pub struct SubstituteError;
-
-impl fmt::Display for SubstituteError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Substitution error")
-    }
-}
-
-impl std::error::Error for SubstituteError {}
-
 #[cfg(test)]
-mod export_variables_tests {
+mod tests {
     use super::*;
 
     #[test]
@@ -86,6 +62,5 @@ mod export_variables_tests {
 
         table
     }
-
 }
 
