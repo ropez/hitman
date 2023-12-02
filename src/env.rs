@@ -1,13 +1,14 @@
 use std::fs::{self, read_to_string};
 use eyre::{Result, eyre};
-use toml::Table as TomlTable;
+use toml::{Table as TomlTable, Value};
+use dialoguer::{FuzzySelect, theme::ColorfulTheme};
 
 // - Should use globals in toml by default (don't enforce multiple environments)
 // - Should use globals as fallback when specifying an environment (instead of _default)
 // - Rename "target" so something else, like current environment
 
-// - Provide --select options to fuzzy search environments
-// - Show '*' messages about variable extraction
+// √ Provide --select options to fuzzy search environments
+// √ Show '*' messages about variable extraction
 // - Support collection multiple variables from arrays
 // - Prompt user for missing substitution values
 // - Prompt user with fuzzy search when we have multiple values
@@ -18,8 +19,33 @@ const CONFIG_FILE: &str = "hittup.toml";
 const TARGET_FILE: &str = ".hittup-target";
 const STATE_FILE: &str = ".hittup-state.toml";
 
+pub fn select_env() -> Result<()> {
+    let items = find_environments(&read_toml(CONFIG_FILE)?)?;
+
+    // Alternative crate: inquire
+
+    let selection = FuzzySelect::with_theme(&ColorfulTheme::default())
+        .with_prompt("Select environment")
+        .items(&items)
+        .interact()?;
+
+    fs::write(TARGET_FILE, &items[selection])?;
+    eprintln!("Current environment is now {}", items[selection]);
+
+    Ok(())
+}
+
+fn find_environments(config: &TomlTable) -> Result<Vec<String>> {
+    let keys: Vec<String> = config.keys()
+        .filter(|k| !k.starts_with("_"))
+        .filter(|k| config.get(*k).expect("key must exist").is_table())
+        .map(|k| k.to_string()).collect();
+
+    return Ok(keys);
+}
+
 pub fn load_env(file_path: &str) -> Result<TomlTable> {
-    use toml::Value::Table;
+    use Value::Table;
 
     let target = read_to_string(TARGET_FILE)
         .map(|t| t.trim().to_string())
@@ -80,5 +106,30 @@ fn read_toml(file_path: &str) -> Result<TomlTable> {
     let cfg = toml::from_str::<TomlTable>(&content)?;
 
     Ok(cfg)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_find_environments() {
+        let config = toml::from_str(r#"
+        global = "foo"
+
+        [foo]
+        value = "koko"
+
+        [bar]
+
+        [_default]
+        fallback = "self"
+
+        "#).unwrap();
+
+        let envs = find_environments(&config).unwrap();
+
+        assert_eq!(envs, vec!["bar", "foo"]);
+    }
 }
 

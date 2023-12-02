@@ -7,7 +7,7 @@ use minreq::{Method, Request, Response};
 use serde_json::Value;
 
 mod env;
-use env::{load_env, update_env};
+use env::{select_env, load_env, update_env};
 
 mod extract;
 use extract::extract_variables;
@@ -34,6 +34,12 @@ use substitute::substitute;
 
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
+
+    if args.iter().any(|a| a.eq("--select")) {
+        select_env()?;
+        return Ok(());
+    }
+
     let file_path = args.get(1).expect("argument should be provided");
 
     let env = load_env(file_path)?;
