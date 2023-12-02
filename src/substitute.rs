@@ -1,6 +1,7 @@
 use std::str;
 use toml::{Table, Value};
 use derive_more::{Display, Error};
+use dialoguer::{Input, theme::ColorfulTheme};
 
 #[derive(Display, Error, Debug, Clone)]
 pub struct SubstituteError;
@@ -45,21 +46,29 @@ pub fn substitute(input: &str, env: &Table) -> Result<String, SubstituteError> {
 fn find_replacement(placeholder: &str, env: &Table) -> Result<String, SubstituteError> {
     let mut parts = placeholder.split("|");
 
-    let key = parts.next().unwrap();
-    match env.get(key.trim()) {
+    let key = parts.next().unwrap().trim();
+    match env.get(key) {
         Some(Value::String(v)) => Ok(v.to_string()),
         Some(Value::Integer(v)) => Ok(v.to_string()),
         Some(Value::Float(v)) => Ok(v.to_string()),
         Some(Value::Boolean(v)) => Ok(v.to_string()),
         Some(_) => Err(SubstituteError),
         None => {
-            if let Some(fallback) = parts.next() {
-                Ok(fallback.trim().to_string())
-            } else {
-                Err(SubstituteError)
-            }
+            let fallback = parts.next().map(|fb| fb.trim());
+
+            Ok(prompt_user(key, fallback).unwrap())
         },
     }
+}
+
+fn prompt_user(key: &str, fallback: Option<&str>) -> eyre::Result<String> {
+    let fb = fallback.unwrap_or("");
+    let res: String = Input::with_theme(&ColorfulTheme::default())
+        .with_prompt(format!("Enter value for {}", key))
+        .default(fb.to_string())
+        .interact()?;
+
+    Ok(res)
 }
 
 #[cfg(test)]

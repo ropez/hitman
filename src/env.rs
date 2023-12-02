@@ -57,13 +57,10 @@ pub fn load_env(file_path: &str) -> Result<TomlTable> {
 
     let config = read_toml(CONFIG_FILE)?;
 
-    if let Some(v) = config.get("_default") {
-        if let Table(t) = v {
-            env.extend(t.clone());
-        } else {
-            return Err(eyre!("`_default` has unexpected type in config"));
-        }
-    }
+    // Global defaults
+    env.extend(config.clone()
+        .into_iter().filter(|(_, v)| !v.is_table())
+        .collect::<Vec<_>>());
 
     if let Some(Table(t)) = config.get(&target) {
         env.extend(t.clone());
@@ -76,6 +73,7 @@ pub fn load_env(file_path: &str) -> Result<TomlTable> {
         None => (),
     }
 
+    // FIXME state per environment
     match read_toml(STATE_FILE).ok() {
         Some(content) => env.extend(content),
         None => (),

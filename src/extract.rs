@@ -1,8 +1,11 @@
+use eyre::{Result, eyre as err};
 use toml::{Table, Value};
+use colored::*;
+use super::util::truncate;
 use jsonpath::Selector;
 use serde_json::Value as JsonValue;
 
-pub fn extract_variables(data: &JsonValue, scope: &Table) -> Result<Table, ()> {
+pub fn extract_variables(data: &JsonValue, scope: &Table) -> Result<Table> {
     let mut out = Table::new();
 
     let extract = scope.get("_extract");
@@ -17,12 +20,13 @@ pub fn extract_variables(data: &JsonValue, scope: &Table) -> Result<Table, ()> {
                         out.insert(key.clone(), Value::String(String::from(val)));
 
                         // FIXME Structured logging, abbreiate long values
-                        eprintln!(" * Extracted '{}' = '{}'", key, val);
+                        let msg = format!("# Got '{}' = '{}'", key, val);
+                        eprintln!("{}", truncate(&msg).yellow());
                     }
                 }
             }
         },
-        Some(_) => return Err(()),
+        Some(_) => return Err(err!("Invalid _extract section")),
         None => {},
     }
 
