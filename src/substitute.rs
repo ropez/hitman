@@ -1,7 +1,7 @@
 use std::str;
 use toml::{Table, Value};
 use derive_more::{Display, Error};
-use dialoguer::{Input, theme::ColorfulTheme};
+use dialoguer::{Input, theme::ColorfulTheme, FuzzySelect};
 
 #[derive(Display, Error, Debug, Clone)]
 pub struct SubstituteError;
@@ -52,12 +52,42 @@ fn find_replacement(placeholder: &str, env: &Table) -> Result<String, Substitute
         Some(Value::Integer(v)) => Ok(v.to_string()),
         Some(Value::Float(v)) => Ok(v.to_string()),
         Some(Value::Boolean(v)) => Ok(v.to_string()),
+        Some(Value::Array(arr)) => Ok(select_replacement(key, &arr)?),
         Some(_) => Err(SubstituteError),
         None => {
             let fallback = parts.next().map(|fb| fb.trim());
 
             Ok(prompt_user(key, fallback).unwrap())
         },
+    }
+}
+
+fn select_replacement(key: &str, values: &Vec<Value>) -> Result<String, SubstituteError> {
+    let display_names: Vec<String> = values
+        .clone()
+        .into_iter()
+        .map(|v| match v {
+            Value::Table(t) => {
+                match t.get("name") {
+                    Some(value) => value.to_string(),
+                    None => t.to_string(),
+                }
+            },
+            other => other.to_string(),
+        })
+        .collect();
+
+    let index = FuzzySelect::with_theme(&ColorfulTheme::default())
+        .with_prompt(format!("Select value for {}", key))
+        .items(&display_names)
+        .interact().expect("FIXME: Generic error types");
+
+    match &values[index] {
+        Value::Table(t) => match t.get("value") {
+            Some(value) => Ok(value.to_string()),
+            _ => Err(SubstituteError),
+        },
+        other => Ok(other.to_string()),
     }
 }
 
