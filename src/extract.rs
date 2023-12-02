@@ -15,6 +15,9 @@ pub fn extract_variables(data: &JsonValue, scope: &Table) -> Result<Table, ()> {
 
                     if let Some(JsonValue::String(val)) = result {
                         out.insert(key.clone(), Value::String(String::from(val)));
+
+                        // FIXME Structured logging, abbreiate long values
+                        eprintln!(" * Extracted '{}' = '{}'", key, val);
                     }
                 }
             }

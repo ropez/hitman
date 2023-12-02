@@ -13,3 +13,4 @@ serde_json = "1.0"
 jsonpath = "0.1"
 toml = "0.8"
 minreq = { version = "2", features = ["https", "json-using-serde"] }
+eyre = "0.6.9"

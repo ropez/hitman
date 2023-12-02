@@ -1,6 +1,6 @@
+use eyre::Result;
 use std::fs::read_to_string;
 use std::str;
-use std::error::Error;
 use httparse::Status::*;
 use colored::*;
 use minreq::{Method, Request, Response};
@@ -32,7 +32,7 @@ use substitute::substitute;
 // - Interactive mode?
 // - HTTP cookes?
 
-fn main() -> Result<(), Box<dyn Error>> {
+fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
     let file_path = args.get(1).expect("argument should be provided");
 
@@ -80,7 +80,7 @@ fn to_method(input: &str) -> Method {
     Method::Custom(input.to_uppercase())
 }
 
-fn print_response(res: &Response) -> Result<(), Box<dyn Error>> {
+fn print_response(res: &Response) -> Result<()> {
     let status = format!("HTTP/1.1 {} {}", res.status_code, res.reason_phrase);
     eprintln!("{}", status.cyan());
 

@@ -1,23 +1,24 @@
-use std::io;
 use std::fs::{self, read_to_string};
-use derive_more::{Display, Error};
+use eyre::{Result, eyre};
 use toml::Table as TomlTable;
 
 // - Should use globals in toml by default (don't enforce multiple environments)
 // - Should use globals as fallback when specifying an environment (instead of _default)
 // - Rename "target" so something else, like current environment
 
+// - Provide --select options to fuzzy search environments
+// - Show '*' messages about variable extraction
+// - Support collection multiple variables from arrays
+// - Prompt user for missing substitution values
+// - Prompt user with fuzzy search when we have multiple values
+// - Prompt user for text input for missing values
+// √ Support fallback values in placeholders
+
 const CONFIG_FILE: &str = "hittup.toml";
 const TARGET_FILE: &str = ".hittup-target";
 const STATE_FILE: &str = ".hittup-state.toml";
 
-#[derive(Debug, Display, Error)]
-pub enum ReadTomlError {
-    IoError(io::Error),
-    TomlError(toml::de::Error),
-}
-
-pub fn load_env(file_path: &str) -> Result<TomlTable, ReadTomlError> {
+pub fn load_env(file_path: &str) -> Result<TomlTable> {
     use toml::Value::Table;
 
     let target = read_to_string(TARGET_FILE)
@@ -34,14 +35,14 @@ pub fn load_env(file_path: &str) -> Result<TomlTable, ReadTomlError> {
         if let Table(t) = v {
             env.extend(t.clone());
         } else {
-            panic!("`_default` has unexpected type in config");
+            return Err(eyre!("`_default` has unexpected type in config"));
         }
     }
 
     if let Some(Table(t)) = config.get(&target) {
         env.extend(t.clone());
     } else {
-        panic!("`{}` not found in config", target);
+        return Err(eyre!("`{}` not found in config", target));
     }
 
     match read_toml(&format!("{}.toml", file_path)).ok() {
@@ -57,7 +58,7 @@ pub fn load_env(file_path: &str) -> Result<TomlTable, ReadTomlError> {
     Ok(env)
 }
 
-pub fn update_env(vars: &TomlTable) -> Result<(), io::Error> {
+pub fn update_env(vars: &TomlTable) -> Result<()> {
     if vars.is_empty() { 
         return Ok(()); 
     }
@@ -67,16 +68,16 @@ pub fn update_env(vars: &TomlTable) -> Result<(), io::Error> {
     let mut state = toml::from_str::<TomlTable>(&content).unwrap_or(TomlTable::new());
 
     state.extend(vars.clone());
-    fs::write(STATE_FILE, toml::to_string_pretty(&state).unwrap())?;
+    fs::write(STATE_FILE, toml::to_string_pretty(&state)?)?;
 
     Ok(())
 }
 
 
-fn read_toml(file_path: &str) -> Result<TomlTable, ReadTomlError> {
-    let content = fs::read_to_string(file_path).map_err(|err| ReadTomlError::IoError(err))?;
+fn read_toml(file_path: &str) -> Result<TomlTable> {
+    let content = fs::read_to_string(file_path)?;
 
-    let cfg = toml::from_str::<TomlTable>(&content).map_err(|err| ReadTomlError::TomlError(err))?;
+    let cfg = toml::from_str::<TomlTable>(&content)?;
 
     Ok(cfg)
 }

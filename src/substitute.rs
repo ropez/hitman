@@ -24,21 +24,14 @@ pub fn substitute(input: &str, env: &Table) -> Result<String, SubstituteError> {
                     output.push_str(&slice[..pos]);
                     slice = &slice[pos..];
 
-                    match slice.find("}}").map(|i| i + 2) {
-                        Some(end) => {
-                            let key = &slice[2 .. end - 2];
-                            match env.get(key.trim()) {
-                                Some(Value::String(v)) => {
-                                    output.push_str(v);
-                                },
-                                Some(_) => return Err(SubstituteError),
-                                None => return Err(SubstituteError),
-                            }
+                    let Some(end) = slice.find("}}").map(|i| i + 2) else {
+                        return Err(SubstituteError);
+                    };
 
-                            slice = &slice[end..];
-                        },
-                        None => return Err(SubstituteError),
-                    }
+                    let rep = find_replacement(&slice[2 .. end - 2], env)?;
+                    output.push_str(&rep);
+
+                    slice = &slice[end..];
                 }
             }
         }
@@ -47,6 +40,26 @@ pub fn substitute(input: &str, env: &Table) -> Result<String, SubstituteError> {
     }
 
     Ok(output)
+}
+
+fn find_replacement(placeholder: &str, env: &Table) -> Result<String, SubstituteError> {
+    let mut parts = placeholder.split("|");
+
+    let key = parts.next().unwrap();
+    match env.get(key.trim()) {
+        Some(Value::String(v)) => Ok(v.to_string()),
+        Some(Value::Integer(v)) => Ok(v.to_string()),
+        Some(Value::Float(v)) => Ok(v.to_string()),
+        Some(Value::Boolean(v)) => Ok(v.to_string()),
+        Some(_) => Err(SubstituteError),
+        None => {
+            if let Some(fallback) = parts.next() {
+                Ok(fallback.trim().to_string())
+            } else {
+                Err(SubstituteError)
+            }
+        },
+    }
 }
 
 #[cfg(test)]
@@ -58,6 +71,9 @@ mod tests {
 
         env.insert("url".to_string(), Value::from("example.com"));
         env.insert("token".to_string(), Value::from("abc123"));
+        env.insert("integer".to_string(), Value::from(42));
+        env.insert("float".to_string(), Value::from(99.99));
+        env.insert("boolean".to_string(), Value::from(true));
 
         env
     }
@@ -71,7 +87,7 @@ mod tests {
     }
 
     #[test]
-    fn substitues_single_variable() {
+    fn substitutes_single_variable() {
         let env = create_env();
         let res = substitute("foo {{url}}\nbar\n", &env).unwrap();
 
@@ -79,7 +95,47 @@ mod tests {
     }
 
     #[test]
-    fn substitues_single_variable_with_speces() {
+    fn substitutes_integer() {
+        let env = create_env();
+        let res = substitute("foo={{integer}}", &env).unwrap();
+
+        assert_eq!(&res, "foo=42\n");
+    }
+
+    #[test]
+    fn substitutes_float() {
+        let env = create_env();
+        let res = substitute("foo={{float}}", &env).unwrap();
+
+        assert_eq!(&res, "foo=99.99\n");
+    }
+
+    #[test]
+    fn substitutes_boolean() {
+        let env = create_env();
+        let res = substitute("foo: {{boolean}}", &env).unwrap();
+
+        assert_eq!(&res, "foo: true\n");
+    }
+
+    #[test]
+    fn substitutes_placeholder_with_default_value() {
+        let env = create_env();
+        let res = substitute("foo: {{url | fallback.com}}\n", &env).unwrap();
+
+        assert_eq!(&res, "foo: example.com\n");
+    }
+
+    #[test]
+    fn substitutes_default_value() {
+        let env = create_env();
+        let res = substitute("foo: {{href | fallback.com }}\n", &env).unwrap();
+
+        assert_eq!(&res, "foo: fallback.com\n");
+    }
+
+    #[test]
+    fn substitutes_single_variable_with_speces() {
         let env = create_env();
         let res = substitute("foo {{ url  }}\nbar\n", &env).unwrap();
 
@@ -87,7 +143,7 @@ mod tests {
     }
 
     #[test]
-    fn substitues_one_variable_per_line() {
+    fn substitutes_one_variable_per_line() {
         let env = create_env();
         let res = substitute("foo {{url}}\nbar {{token}}\n", &env).unwrap();
 
@@ -95,7 +151,7 @@ mod tests {
     }
 
     #[test]
-    fn substitues_variable_on_the_same_line() {
+    fn substitutes_variable_on_the_same_line() {
         let env = create_env();
         let res = substitute("foo {{url}}, bar {{token}}\n", &env).unwrap();
 
