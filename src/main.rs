@@ -1,10 +1,15 @@
+use dialoguer::FuzzySelect;
+use dialoguer::theme::ColorfulTheme;
 use eyre::Result;
-use std::fs::read_to_string;
+use std::fs::{read_to_string, read_dir};
 use std::str;
 use httparse::Status::*;
 use colored::*;
 use minreq::{Method, Request, Response};
 use serde_json::Value;
+
+mod util;
+use util::truncate;
 
 mod env;
 use env::{select_env, load_env, update_env};
@@ -40,13 +45,31 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    let file_path = args.get(1).expect("argument should be provided");
+    if let Some(file_path) = args.get(1) {
+        make_request(file_path)
+    } else {
+        loop {
+            let files = find_available_requests()?;
 
+            eprintln!();
+            let selection = FuzzySelect::with_theme(&ColorfulTheme::default())
+                .with_prompt("Make request")
+                .items(&files)
+                .interact()?;
+
+            let file_path = &files[selection];
+
+            let _ = make_request(file_path);
+        }
+    }
+}
+
+fn make_request(file_path: &str) -> Result<()> {
     let env = load_env(file_path)?;
 
     let buf = substitute(&read_to_string(file_path)?, &env)?;
 
-    // println!("{}\n--\n", buf.blue());
+    print_request(&buf)?;
 
     let mut headers = [httparse::EMPTY_HEADER; 64];
     let mut req = httparse::Request::new(&mut headers);
@@ -74,10 +97,10 @@ fn main() -> Result<()> {
 
     print_response(&response)?;
 
-    let json: Value = response.json()?;
-    let vars = extract_variables(&json, &env).unwrap();
-
-    update_env(&vars)?;
+    if let Ok(json) = response.json::<Value>() {
+        let vars = extract_variables(&json, &env)?;
+        update_env(&vars)?;
+    }
 
     Ok(())
 }
@@ -86,23 +109,56 @@ fn to_method(input: &str) -> Method {
     Method::Custom(input.to_uppercase())
 }
 
+fn print_request(buf: &str) -> Result<()> {
+    for line in buf.lines() {
+        eprintln!("> {}", truncate(line).blue());
+    }
+
+    eprintln!("");
+
+    Ok(())
+}
+
 fn print_response(res: &Response) -> Result<()> {
     let status = format!("HTTP/1.1 {} {}", res.status_code, res.reason_phrase);
-    eprintln!("{}", status.cyan());
+    eprintln!("< {}", status.cyan());
 
     let mut head = String::new();
     for (name, value) in &res.headers {
         head.push_str(&format!("{}: {}\n", name, value));
     }
 
-    eprintln!("{}", head.cyan());
+    for line in head.lines() {
+        eprintln!("< {}", truncate(line).cyan());
+    }
 
     // FIXME Check if content type is JSON
 
-    let json: Value = res.json()?;
+    if let Ok(json) = res.json::<Value>() {
+        eprintln!();
+        println!("{}", serde_json::to_string_pretty(&json)?);
+    }
 
-    println!("{}", serde_json::to_string_pretty(&json)?);
+    eprintln!();
 
     Ok(())
+}
+
+fn find_available_requests() -> Result<Vec<String>, eyre::Error> {
+    let files: Vec<_> = read_dir(".")?
+        .into_iter()
+        .filter(|r| r.is_ok())
+        .map(|r| r.expect("is ok").path())
+        .filter(|p| {
+            if let Some(ext) = p.extension() { 
+                ext == "http"
+            } else {
+                false
+            }
+        })
+        .map(|p| String::from(p.file_name().unwrap().to_str().unwrap()))
+        .collect();
+
+    Ok(files)
 }
 
