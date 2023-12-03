@@ -20,6 +20,9 @@ use extract::extract_variables;
 mod substitute;
 use substitute::substitute;
 
+mod prompt;
+use prompt::set_interactive_mode;
+
 // √ HTTP Request files
 // √ Show stylized response
 // √ Save response for reference
@@ -44,6 +47,8 @@ fn main() -> Result<()> {
         select_env()?;
         return Ok(());
     }
+
+    set_interactive_mode(true);
 
     if let Some(file_path) = args.get(1) {
         make_request(file_path)

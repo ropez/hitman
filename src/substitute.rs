@@ -2,6 +2,7 @@ use std::str;
 use toml::{Table, Value};
 use derive_more::{Display, Error};
 use dialoguer::{Input, theme::ColorfulTheme, FuzzySelect};
+use crate::prompt::is_interactive_mode;
 
 #[derive(Display, Error, Debug, Clone)]
 pub struct SubstituteError;
@@ -52,12 +53,24 @@ fn find_replacement(placeholder: &str, env: &Table) -> Result<String, Substitute
         Some(Value::Integer(v)) => Ok(v.to_string()),
         Some(Value::Float(v)) => Ok(v.to_string()),
         Some(Value::Boolean(v)) => Ok(v.to_string()),
-        Some(Value::Array(arr)) => Ok(select_replacement(key, &arr)?),
+        Some(Value::Array(arr)) => {
+            if is_interactive_mode() {
+                Ok(select_replacement(key, &arr)?)
+            } else {
+                Err(SubstituteError)
+            }
+        }
         Some(_) => Err(SubstituteError),
         None => {
             let fallback = parts.next().map(|fb| fb.trim());
 
-            Ok(prompt_user(key, fallback).unwrap())
+            if is_interactive_mode() {
+                Ok(prompt_user(key, fallback).unwrap())
+            } else {
+                fallback
+                    .map(|f| f.to_string())
+                    .ok_or(SubstituteError)
+            }
         },
     }
 }
@@ -166,7 +179,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "prompts for input"]
     fn substitutes_default_value() {
         let env = create_env();
         let res = substitute("foo: {{href | fallback.com }}\n", &env).unwrap();
