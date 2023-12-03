@@ -1,9 +1,15 @@
-use eyre::{Result, eyre as err};
+use eyre::{Result, eyre};
 use toml::{Table, Value};
 use colored::*;
 use super::util::truncate;
 use jsonpath::Selector;
 use serde_json::Value as JsonValue;
+
+macro_rules! err {
+    ($msg:literal $(,)?) => { Err(eyre!($msg)) };
+    ($err:expr $(,)?) => { Err(eyre!($err)) };
+    ($fmt:expr, $($arg:tt)*) => { Err(eyre!($fmt, $($arg)*)) };
+}
 
 pub fn extract_variables(data: &JsonValue, scope: &Table) -> Result<Table> {
     let mut out = Table::new();
@@ -12,60 +18,83 @@ pub fn extract_variables(data: &JsonValue, scope: &Table) -> Result<Table> {
     match extract {
         Some(Value::Table(table)) => {
             for (key, value) in table {
-                if let Value::String(jsonpath) = value {
-                    let selector = Selector::new(&jsonpath).unwrap();
-                    let result = selector.find(&data).next();
+                match value {
+                    Value::String(jsonpath) => {
+                        let selector = make_selector(&jsonpath)?;
 
-                    if let Some(JsonValue::String(val)) = result {
-                        out.insert(key.clone(), Value::String(String::from(val)));
-
-                        // FIXME Structured logging, abbreiate long values
-                        let msg = format!("# Got '{}' = '{}'", key, val);
-                        eprintln!("{}", truncate(&msg).yellow());
-                    }
-                } else if let Value::Table(conf) = value {
-                    let list = Selector::new(&get_string_or_panic(&conf, "list")).unwrap();
-                    let value = Selector::new(&get_string_or_panic(&conf, "value")).unwrap();
-                    let name = Selector::new(&get_string_or_panic(&conf, "name")).unwrap();
-
-                    let res = list.find(&data).next().unwrap();
-                    match res {
-                        JsonValue::Array(items) => {
-                            let x: Vec<Value> = items.iter()
-                                .map(|k| {
-                                    let v = value.find(&k).next().unwrap();
-                                    let n = name.find(&k).next().unwrap();
-
-                                    let mut out = Table::new();
-                                    out.insert("value".to_string(), Value::try_from(v).unwrap());
-                                    out.insert("name".to_string(), Value::try_from(n).unwrap());
-
-                                    Value::Table(out)
-                                })
-                                .collect();
-
-                            let msg = format!("# Got '{}' with {} elements", key, x.len());
+                        if let Some(JsonValue::String(val)) = selector.find(&data).next() {
+                            // FIXME Structured logging, abbreiate long values
+                            let msg = format!("# Got '{}' = '{}'", key, val);
                             eprintln!("{}", truncate(&msg).yellow());
 
-                            let result = Value::Array(x);
-                            out.insert(key.clone(), result);
+                            out.insert(key.clone(), Value::String(String::from(val)));
                         }
-                        _ => panic!("Oops"),
-                    }
+                    },
+                    Value::Table(conf) => {
+                        let items_selector = make_selector(&get_string(&conf, "list")?)?;
+                        let value_selectors = make_item_selectors(&conf)?;
+
+                        // jsonpath returns an iterator that contains one element,
+                        // which is the JSON array.
+
+                        if let Some(JsonValue::Array(items)) = items_selector.find(&data).next() {
+                            let mut toml_items: Vec<Value> = Vec::new();
+
+                            for item_json in items {
+                                let mut toml_item = Table::new();
+                                for (name, selector) in value_selectors.iter() {
+                                    if let Some(v) = selector.find(&item_json).next() {
+                                        toml_item.insert(name.clone(), Value::try_from(v)?);
+                                    }
+                                }
+
+                                let json_value = Value::try_from(item_json.to_string())?;
+                                toml_item.insert(String::from("_raw"), json_value);
+
+                                toml_items.push(Value::Table(toml_item));
+                            }
+
+                            let msg = format!("# Got '{}' with {} elements", key, toml_items.len());
+                            eprintln!("{}", truncate(&msg).yellow());
+
+                            out.insert(key.clone(), Value::Array(toml_items));
+                        }
+                    },
+                    _ => return err!("Invalid _extract rule: {}", value),
                 }
             }
         },
-        Some(_) => return Err(err!("Invalid _extract section")),
+        Some(_) => return err!("Invalid _extract section"),
         None => {},
     }
 
     Ok(out)
 }
 
-fn get_string_or_panic(table: &Table, key: &str) -> String {
+fn make_item_selectors(conf: &Table) -> Result<Vec<(String, Selector)>> {
+    conf.iter()
+        .filter_map(|(k, v)| {
+            if k == "list" { 
+                None 
+            } else { 
+                if let Value::String(s) = v {
+                    Some(make_selector(s).map(|r| (k.to_string(), r)))
+                } else {
+                    None
+                }
+            }
+        })
+        .collect::<Result<Vec<_>>>()
+}
+
+fn make_selector(path: &str) -> Result<Selector> {
+    Selector::new(path).map_err(|err| eyre!("Invalid jsonpath: {}", err))
+}
+
+fn get_string(table: &Table, key: &str) -> Result<String> {
     match table.get(key) {
-        Some(Value::String(s)) => s.clone(),
-        _ => panic!("Oops"),
+        Some(Value::String(s)) => Ok(s.clone()),
+        _ => err!("Required key not found: {}", key),
     }
 }
 
@@ -104,17 +133,22 @@ mod tests {
 
         let data = serde_json::from_str(r#"{ 
             "Tools": [
-                { "ToolId": 123, "Name": "First tool" },
-                { "ToolId": 345, "Name": "Second tool" }
+                { "Name": "First tool", "ToolId": 123 },
+                { "Name": "Second tool", "ToolId": 345 }
             ]
         }"#).unwrap();
         let res = extract_variables(&data, &env).unwrap();
 
         let expected: Table = toml::from_str(r#"
-            ToolId = [
-                { value = 123, name = "First tool" },
-                { value = 345, name = "Second tool" },
-            ]
+            [[ToolId]]
+            value = 123
+            name = "First tool"
+            _raw = "{\"Name\":\"First tool\",\"ToolId\":123}"
+
+            [[ToolId]]
+            value = 345
+            name = "Second tool"
+            _raw = "{\"Name\":\"Second tool\",\"ToolId\":345}"
         "#).unwrap();
 
         assert!(res.get("ToolId").is_some());

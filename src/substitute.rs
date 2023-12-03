@@ -5,7 +5,16 @@ use dialoguer::{Input, theme::ColorfulTheme, FuzzySelect};
 use crate::prompt::is_interactive_mode;
 
 #[derive(Display, Error, Debug, Clone)]
-pub struct SubstituteError;
+pub enum SubstituteError {
+    #[display(fmt = "Could not find replacement")]
+    ReplacementNotFound,
+
+    #[display(fmt = "Syntax error")]
+    SyntaxError,
+
+    #[display(fmt = "Type not supported")]
+    TypeNotSupported,
+}
 
 pub fn substitute(input: &str, env: &Table) -> Result<String, SubstituteError> {
     let mut output = String::new();
@@ -16,7 +25,7 @@ pub fn substitute(input: &str, env: &Table) -> Result<String, SubstituteError> {
             match slice.find("{{") {
                 None => {
                     match slice.find("}}") {
-                        Some(_) => return Err(SubstituteError),
+                        Some(_) => return Err(SubstituteError::SyntaxError),
                         None => {},
                     }
                     output.push_str(slice);
@@ -27,7 +36,7 @@ pub fn substitute(input: &str, env: &Table) -> Result<String, SubstituteError> {
                     slice = &slice[pos..];
 
                     let Some(end) = slice.find("}}").map(|i| i + 2) else {
-                        return Err(SubstituteError);
+                        return Err(SubstituteError::SyntaxError);
                     };
 
                     let rep = find_replacement(&slice[2 .. end - 2], env)?;
@@ -47,7 +56,7 @@ pub fn substitute(input: &str, env: &Table) -> Result<String, SubstituteError> {
 fn find_replacement(placeholder: &str, env: &Table) -> Result<String, SubstituteError> {
     let mut parts = placeholder.split("|");
 
-    let key = parts.next().unwrap().trim();
+    let key = parts.next().unwrap_or("").trim();
     match env.get(key) {
         Some(Value::String(v)) => Ok(v.to_string()),
         Some(Value::Integer(v)) => Ok(v.to_string()),
@@ -57,10 +66,10 @@ fn find_replacement(placeholder: &str, env: &Table) -> Result<String, Substitute
             if is_interactive_mode() {
                 Ok(select_replacement(key, &arr)?)
             } else {
-                Err(SubstituteError)
+                Err(SubstituteError::ReplacementNotFound)
             }
         }
-        Some(_) => Err(SubstituteError),
+        Some(_) => Err(SubstituteError::TypeNotSupported),
         None => {
             let fallback = parts.next().map(|fb| fb.trim());
 
@@ -69,7 +78,7 @@ fn find_replacement(placeholder: &str, env: &Table) -> Result<String, Substitute
             } else {
                 fallback
                     .map(|f| f.to_string())
-                    .ok_or(SubstituteError)
+                    .ok_or(SubstituteError::ReplacementNotFound)
             }
         },
     }
@@ -90,6 +99,7 @@ fn select_replacement(key: &str, values: &Vec<Value>) -> Result<String, Substitu
         })
         .collect();
 
+    // How to abort on escape?
     let index = FuzzySelect::with_theme(&ColorfulTheme::default())
         .with_prompt(format!("Select value for {}", key))
         .items(&display_names)
@@ -98,7 +108,7 @@ fn select_replacement(key: &str, values: &Vec<Value>) -> Result<String, Substitu
     match &values[index] {
         Value::Table(t) => match t.get("value") {
             Some(value) => Ok(value.to_string()),
-            _ => Err(SubstituteError),
+            _ => Err(SubstituteError::ReplacementNotFound),
         },
         other => Ok(other.to_string()),
     }
