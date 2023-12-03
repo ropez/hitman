@@ -16,7 +16,7 @@ mod util;
 use util::truncate;
 
 mod env;
-use env::{select_env, load_env, update_env};
+use env::{select_env, find_root_dir, load_env, update_env};
 
 mod extract;
 use extract::extract_variables;
@@ -30,22 +30,7 @@ use prompt::set_interactive_mode;
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
 
-    // The root dir is where we find hittup.yaml,
-    // scanning parent directories until we find it
-
-    let root_dir = {
-        let mut dir = current_dir()?;
-        loop {
-            if dir.join("hittup.toml").exists() {
-                break dir;
-            }
-            if let Some(parent) = dir.parent() {
-                dir = parent.to_path_buf();
-            } else {
-                break dir;
-            }
-        }
-    };
+    let root_dir = find_root_dir()?;
     eprintln!("Root dir: {}", root_dir.display());
 
     if args.iter().any(|a| a.eq("--select")) {
