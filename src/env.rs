@@ -1,4 +1,5 @@
 use std::fs::{self, read_to_string};
+use std::path::Path;
 use eyre::Result;
 use toml::{Table as TomlTable, Value};
 use dialoguer::{FuzzySelect, theme::ColorfulTheme};
@@ -7,8 +8,8 @@ const CONFIG_FILE: &str = "hittup.toml";
 const TARGET_FILE: &str = ".hittup-target";
 const STATE_FILE: &str = ".hittup-state.toml";
 
-pub fn select_env() -> Result<()> {
-    let items = find_environments(&read_toml(CONFIG_FILE)?)?;
+pub fn select_env(root_dir: &Path) -> Result<()> {
+    let items = find_environments(&read_toml(&root_dir.join(CONFIG_FILE))?)?;
 
     // Alternative crate: inquire
 
@@ -17,7 +18,7 @@ pub fn select_env() -> Result<()> {
         .items(&items)
         .interact()?;
 
-    fs::write(TARGET_FILE, &items[selection])?;
+    fs::write(root_dir.join(TARGET_FILE), &items[selection])?;
     eprintln!("Current environment is now {}", items[selection]);
 
     Ok(())
@@ -32,10 +33,10 @@ fn find_environments(config: &TomlTable) -> Result<Vec<String>> {
     return Ok(keys);
 }
 
-pub fn load_env(file_path: &str) -> Result<TomlTable> {
+pub fn load_env(root_dir: &Path, file_path: &Path) -> Result<TomlTable> {
     use Value::Table;
 
-    let target = read_to_string(TARGET_FILE)
+    let target = read_to_string(root_dir.join(TARGET_FILE))
         .map(|t| t.trim().to_string())
         .unwrap_or("default".to_string());
 
@@ -43,7 +44,7 @@ pub fn load_env(file_path: &str) -> Result<TomlTable> {
 
     // FIXME Search from file_path, traverse upwards
 
-    let config = read_toml(CONFIG_FILE)?;
+    let config = read_toml(&root_dir.join(CONFIG_FILE))?;
 
     // Global defaults
     env.extend(config.clone()
@@ -56,13 +57,13 @@ pub fn load_env(file_path: &str) -> Result<TomlTable> {
         return err!("`{}` not found in config", target);
     }
 
-    match read_toml(&format!("{}.toml", file_path)).ok() {
+    match read_toml(&file_path.with_extension("http.toml")).ok() {
         Some(content) => env.extend(content),
         None => (),
     }
 
     // FIXME state per environment
-    match read_toml(STATE_FILE).ok() {
+    match read_toml(&root_dir.join(STATE_FILE)).ok() {
         Some(content) => env.extend(content),
         None => (),
     }
@@ -86,7 +87,7 @@ pub fn update_env(vars: &TomlTable) -> Result<()> {
 }
 
 
-fn read_toml(file_path: &str) -> Result<TomlTable> {
+fn read_toml(file_path: &Path) -> Result<TomlTable> {
     let content = fs::read_to_string(file_path)?;
 
     let cfg = toml::from_str::<TomlTable>(&content)?;
