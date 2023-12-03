@@ -1,4 +1,5 @@
 use std::str;
+use eyre::Result;
 use toml::{Table, Value};
 use derive_more::{Display, Error};
 use dialoguer::{Input, theme::ColorfulTheme, FuzzySelect};
@@ -14,9 +15,12 @@ pub enum SubstituteError {
 
     #[display(fmt = "Type not supported")]
     TypeNotSupported,
+
+    #[display(fmt = "User cancelled")]
+    UserCancelled,
 }
 
-pub fn substitute(input: &str, env: &Table) -> Result<String, SubstituteError> {
+pub fn substitute(input: &str, env: &Table) -> Result<String> {
     let mut output = String::new();
 
     for line in input.lines() {
@@ -25,7 +29,7 @@ pub fn substitute(input: &str, env: &Table) -> Result<String, SubstituteError> {
             match slice.find("{{") {
                 None => {
                     match slice.find("}}") {
-                        Some(_) => return Err(SubstituteError::SyntaxError),
+                        Some(_) => return err!(SubstituteError::SyntaxError),
                         None => {},
                     }
                     output.push_str(slice);
@@ -36,7 +40,7 @@ pub fn substitute(input: &str, env: &Table) -> Result<String, SubstituteError> {
                     slice = &slice[pos..];
 
                     let Some(end) = slice.find("}}").map(|i| i + 2) else {
-                        return Err(SubstituteError::SyntaxError);
+                        return err!(SubstituteError::SyntaxError);
                     };
 
                     let rep = find_replacement(&slice[2 .. end - 2], env)?;
@@ -53,7 +57,7 @@ pub fn substitute(input: &str, env: &Table) -> Result<String, SubstituteError> {
     Ok(output)
 }
 
-fn find_replacement(placeholder: &str, env: &Table) -> Result<String, SubstituteError> {
+fn find_replacement(placeholder: &str, env: &Table) -> Result<String> {
     let mut parts = placeholder.split("|");
 
     let key = parts.next().unwrap_or("").trim();
@@ -66,10 +70,10 @@ fn find_replacement(placeholder: &str, env: &Table) -> Result<String, Substitute
             if is_interactive_mode() {
                 Ok(select_replacement(key, &arr)?)
             } else {
-                Err(SubstituteError::ReplacementNotFound)
+                err!(SubstituteError::ReplacementNotFound)
             }
         }
-        Some(_) => Err(SubstituteError::TypeNotSupported),
+        Some(_) => err!(SubstituteError::TypeNotSupported),
         None => {
             let fallback = parts.next().map(|fb| fb.trim());
 
@@ -78,13 +82,13 @@ fn find_replacement(placeholder: &str, env: &Table) -> Result<String, Substitute
             } else {
                 fallback
                     .map(|f| f.to_string())
-                    .ok_or(SubstituteError::ReplacementNotFound)
+                    .ok_or(SubstituteError::ReplacementNotFound.into())
             }
         },
     }
 }
 
-fn select_replacement(key: &str, values: &Vec<Value>) -> Result<String, SubstituteError> {
+fn select_replacement(key: &str, values: &Vec<Value>) -> Result<String> {
     let display_names: Vec<String> = values
         .clone()
         .into_iter()
@@ -100,28 +104,37 @@ fn select_replacement(key: &str, values: &Vec<Value>) -> Result<String, Substitu
         .collect();
 
     // How to abort on escape?
-    let index = FuzzySelect::with_theme(&ColorfulTheme::default())
+    let index_opt = FuzzySelect::with_theme(&ColorfulTheme::default())
         .with_prompt(format!("Select value for {}", key))
         .items(&display_names)
-        .interact().expect("FIXME: Generic error types");
+        .interact_opt()?;
 
-    match &values[index] {
-        Value::Table(t) => match t.get("value") {
-            Some(value) => Ok(value.to_string()),
-            _ => Err(SubstituteError::ReplacementNotFound),
+    match index_opt {
+        Some(index) => {
+            match &values[index] {
+                Value::Table(t) => match t.get("value") {
+                    Some(value) => Ok(value.to_string()),
+                    _ => err!(SubstituteError::ReplacementNotFound),
+                },
+                other => Ok(other.to_string()),
+            }
         },
-        other => Ok(other.to_string()),
+        None => err!(SubstituteError::UserCancelled),
     }
 }
 
-fn prompt_user(key: &str, fallback: Option<&str>) -> eyre::Result<String> {
+fn prompt_user(key: &str, fallback: Option<&str>) -> Result<String> {
     let fb = fallback.unwrap_or("");
-    let res: String = Input::with_theme(&ColorfulTheme::default())
+
+    // Issue: Can't cancel here
+    // https://github.com/console-rs/dialoguer/issues/160
+
+    let input = Input::with_theme(&ColorfulTheme::default())
         .with_prompt(format!("Enter value for {}", key))
         .default(fb.to_string())
-        .interact()?;
+        .interact_text()?;
 
-    Ok(res)
+    Ok(input)
 }
 
 #[cfg(test)]

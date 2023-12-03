@@ -1,5 +1,5 @@
 use std::fs::{self, read_to_string};
-use eyre::{Result, eyre};
+use eyre::Result;
 use toml::{Table as TomlTable, Value};
 use dialoguer::{FuzzySelect, theme::ColorfulTheme};
 
@@ -53,7 +53,7 @@ pub fn load_env(file_path: &str) -> Result<TomlTable> {
     if let Some(Table(t)) = config.get(&target) {
         env.extend(t.clone());
     } else {
-        return Err(eyre!("`{}` not found in config", target));
+        return err!("`{}` not found in config", target);
     }
 
     match read_toml(&format!("{}.toml", file_path)).ok() {

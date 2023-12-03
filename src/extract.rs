@@ -5,12 +5,6 @@ use super::util::truncate;
 use jsonpath::Selector;
 use serde_json::Value as JsonValue;
 
-macro_rules! err {
-    ($msg:literal $(,)?) => { Err(eyre!($msg)) };
-    ($err:expr $(,)?) => { Err(eyre!($err)) };
-    ($fmt:expr, $($arg:tt)*) => { Err(eyre!($fmt, $($arg)*)) };
-}
-
 pub fn extract_variables(data: &JsonValue, scope: &Table) -> Result<Table> {
     let mut out = Table::new();
 
@@ -48,8 +42,8 @@ pub fn extract_variables(data: &JsonValue, scope: &Table) -> Result<Table> {
                                     }
                                 }
 
-                                let json_value = Value::try_from(item_json.to_string())?;
-                                toml_item.insert(String::from("_raw"), json_value);
+                                let raw_json = Value::try_from(item_json.to_string())?;
+                                toml_item.insert(String::from("_raw"), raw_json);
 
                                 toml_items.push(Value::Table(toml_item));
                             }

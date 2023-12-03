@@ -8,6 +8,7 @@ use colored::*;
 use minreq::{Method, Request, Response};
 use serde_json::Value;
 
+#[macro_use]
 mod util;
 use util::truncate;
 
@@ -18,7 +19,7 @@ mod extract;
 use extract::extract_variables;
 
 mod substitute;
-use substitute::substitute;
+use substitute::{substitute, SubstituteError};
 
 mod prompt;
 use prompt::set_interactive_mode;
@@ -43,11 +44,26 @@ fn main() -> Result<()> {
             let selection = FuzzySelect::with_theme(&ColorfulTheme::default())
                 .with_prompt("Make request")
                 .items(&files)
-                .interact()?;
+                .interact_opt()?;
 
-            let file_path = &files[selection];
+            match selection {
+                Some(index) => {
+                    let file_path = &files[index];
 
-            let _ = make_request(file_path);
+                    match make_request(file_path) {
+                        Ok(()) => (),
+                        Err(e) => {
+                            match e.downcast_ref() {
+                                Some(SubstituteError::UserCancelled) => {},
+                                _ => {
+                                    eprintln!("{}", e);
+                                }
+                            }
+                        }
+                    }
+                },
+                None => break Ok(()),
+            };
         }
     }
 }
