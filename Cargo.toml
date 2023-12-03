@@ -12,6 +12,7 @@ httparse = "1.8"
 serde_json = "1.0"
 jsonpath = "0.1"
 toml = "0.8"
+walkdir = "2"
 minreq = { version = "2", features = ["https", "json-using-serde"] }
 eyre = "0.6.9"
 dialoguer = { version = "0.11.0", features = ["fuzzy-select"] }

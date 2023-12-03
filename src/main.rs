@@ -1,8 +1,11 @@
 use dialoguer::FuzzySelect;
 use dialoguer::theme::ColorfulTheme;
 use eyre::Result;
-use std::fs::{read_to_string, read_dir};
+use std::fs::read_to_string;
+use std::path::{Path, PathBuf};
 use std::str;
+use std::env::current_dir;
+use walkdir::WalkDir;
 use httparse::Status::*;
 use colored::*;
 use minreq::{Method, Request, Response};
@@ -27,30 +30,51 @@ use prompt::set_interactive_mode;
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
 
+    // The root dir is where we find hittup.yaml,
+    // scanning parent directories until we find it
+
+    let root_dir = {
+        let mut dir = current_dir()?;
+        loop {
+            if dir.join("hittup.toml").exists() {
+                break dir;
+            }
+            if let Some(parent) = dir.parent() {
+                dir = parent.to_path_buf();
+            } else {
+                break dir;
+            }
+        }
+    };
+    eprintln!("Root dir: {}", root_dir.display());
+
     if args.iter().any(|a| a.eq("--select")) {
-        select_env()?;
+        select_env(&root_dir)?;
         return Ok(());
     }
 
     set_interactive_mode(true);
 
+    let cwd = current_dir()?;
+
     if let Some(file_path) = args.get(1) {
-        make_request(file_path)
+        make_request(&root_dir, &cwd.join(file_path))
     } else {
         loop {
-            let files = find_available_requests()?;
+            let files = find_available_requests(&cwd)?;
+            let display_names = files.iter().map(|p| p.display()).collect::<Vec<_>>();
 
             eprintln!();
             let selection = FuzzySelect::with_theme(&ColorfulTheme::default())
                 .with_prompt("Make request")
-                .items(&files)
+                .items(&display_names)
                 .interact_opt()?;
 
             match selection {
                 Some(index) => {
                     let file_path = &files[index];
 
-                    match make_request(file_path) {
+                    match make_request(&root_dir, &cwd.join(file_path)) {
                         Ok(()) => (),
                         Err(e) => {
                             match e.downcast_ref() {
@@ -68,8 +92,8 @@ fn main() -> Result<()> {
     }
 }
 
-fn make_request(file_path: &str) -> Result<()> {
-    let env = load_env(file_path)?;
+fn make_request(root_dir: &Path, file_path: &Path) -> Result<()> {
+    let env = load_env(root_dir, file_path)?;
 
     let buf = substitute(&read_to_string(file_path)?, &env)?;
 
@@ -148,19 +172,23 @@ fn print_response(res: &Response) -> Result<()> {
     Ok(())
 }
 
-fn find_available_requests() -> Result<Vec<String>, eyre::Error> {
-    let files: Vec<_> = read_dir(".")?
+fn find_available_requests(cwd: &Path) -> Result<Vec<PathBuf>, eyre::Error> {
+    let files: Vec<_> = WalkDir::new(cwd)
         .into_iter()
-        .filter(|r| r.is_ok())
-        .map(|r| r.expect("is ok").path())
-        .filter(|p| {
-            if let Some(ext) = p.extension() { 
-                ext == "http"
-            } else {
-                false
-            }
+        .filter_map(|e| e.ok())
+        .filter(|e| {
+            e.file_name().to_str().map(|s| s.ends_with(".http")).unwrap_or(false)
         })
-        .map(|p| String::from(p.file_name().unwrap().to_str().unwrap()))
+        .map(|p| {
+            // Convert to relative path, based on depth
+            let components: Vec<_> = p.path().components().collect();
+            let relative_components: Vec<_> = components[(components.len() - p.depth())..]
+                .iter()
+                .map(|c| c.as_os_str())
+                .collect();
+
+            PathBuf::from_iter(&relative_components)
+        })
         .collect();
 
     Ok(files)
