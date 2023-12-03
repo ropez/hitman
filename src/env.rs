@@ -1,12 +1,13 @@
 use std::fs::{self, read_to_string};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::env::current_dir;
 use eyre::Result;
 use toml::{Table as TomlTable, Value};
 use dialoguer::{FuzzySelect, theme::ColorfulTheme};
 
-const CONFIG_FILE: &str = "hittup.toml";
-const TARGET_FILE: &str = ".hittup-target";
-const STATE_FILE: &str = ".hittup-state.toml";
+const CONFIG_FILE: &str = "hitman.toml";
+const TARGET_FILE: &str = ".hitman-target";
+const DATA_FILE: &str = ".hitman-data.toml";
 
 pub fn select_env(root_dir: &Path) -> Result<()> {
     let items = find_environments(&read_toml(&root_dir.join(CONFIG_FILE))?)?;
@@ -14,14 +15,32 @@ pub fn select_env(root_dir: &Path) -> Result<()> {
     // Alternative crate: inquire
 
     let selection = FuzzySelect::with_theme(&ColorfulTheme::default())
-        .with_prompt("Select environment")
+        .with_prompt("Select target")
         .items(&items)
         .interact()?;
 
     fs::write(root_dir.join(TARGET_FILE), &items[selection])?;
-    eprintln!("Current environment is now {}", items[selection]);
+    eprintln!("Target set to {}", items[selection]);
 
     Ok(())
+}
+
+// The root dir is where we find hitman.toml,
+// scanning parent directories until we find it
+pub fn find_root_dir() -> Result<PathBuf> {
+    let mut dir = current_dir()?;
+    let res = loop {
+        if dir.join(CONFIG_FILE).exists() {
+            break dir;
+        }
+        if let Some(parent) = dir.parent() {
+            dir = parent.to_path_buf();
+        } else {
+            break dir;
+        }
+    };
+
+    Ok(res)
 }
 
 fn find_environments(config: &TomlTable) -> Result<Vec<String>> {
@@ -42,8 +61,6 @@ pub fn load_env(root_dir: &Path, file_path: &Path) -> Result<TomlTable> {
 
     let mut env = TomlTable::new();
 
-    // FIXME Search from file_path, traverse upwards
-
     let config = read_toml(&root_dir.join(CONFIG_FILE))?;
 
     // Global defaults
@@ -63,7 +80,7 @@ pub fn load_env(root_dir: &Path, file_path: &Path) -> Result<TomlTable> {
     }
 
     // FIXME state per environment
-    match read_toml(&root_dir.join(STATE_FILE)).ok() {
+    match read_toml(&root_dir.join(DATA_FILE)).ok() {
         Some(content) => env.extend(content),
         None => (),
     }
@@ -76,12 +93,12 @@ pub fn update_env(vars: &TomlTable) -> Result<()> {
         return Ok(()); 
     }
 
-    let content = fs::read_to_string(STATE_FILE).unwrap_or("".to_string());
+    let content = fs::read_to_string(DATA_FILE).unwrap_or("".to_string());
 
     let mut state = toml::from_str::<TomlTable>(&content).unwrap_or(TomlTable::new());
 
     state.extend(vars.clone());
-    fs::write(STATE_FILE, toml::to_string_pretty(&state)?)?;
+    fs::write(DATA_FILE, toml::to_string_pretty(&state)?)?;
 
     Ok(())
 }
