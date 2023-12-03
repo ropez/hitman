@@ -23,23 +23,6 @@ use substitute::substitute;
 mod prompt;
 use prompt::set_interactive_mode;
 
-// √ HTTP Request files
-// √ Show stylized response
-// √ Save response for reference
-// √ Toml config with environments
-// √ Generalized variable substitution
-// √ Structured storage
-// √ Select environment
-// - 'env' should be a plain string-> string map
-// - Verbosity control
-// - Structured code
-// - Error handling
-// - High performance
-// - Enterprise cloud server?
-// - Workflows (batch, pipelines)?
-// - Interactive mode?
-// - HTTP cookes?
-
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
 

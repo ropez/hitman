@@ -3,18 +3,6 @@ use eyre::{Result, eyre};
 use toml::{Table as TomlTable, Value};
 use dialoguer::{FuzzySelect, theme::ColorfulTheme};
 
-// - Should use globals in toml by default (don't enforce multiple environments)
-// - Should use globals as fallback when specifying an environment (instead of _default)
-// - Rename "target" so something else, like current environment
-
-// √ Provide --select options to fuzzy search environments
-// √ Show '*' messages about variable extraction
-// - Support collection multiple variables from arrays
-// - Prompt user for missing substitution values
-// - Prompt user with fuzzy search when we have multiple values
-// - Prompt user for text input for missing values
-// √ Support fallback values in placeholders
-
 const CONFIG_FILE: &str = "hittup.toml";
 const TARGET_FILE: &str = ".hittup-target";
 const STATE_FILE: &str = ".hittup-state.toml";
