@@ -2,6 +2,7 @@ use std::fs::{self, read_to_string};
 use std::path::{Path, PathBuf};
 use std::env::current_dir;
 use eyre::{Result, bail};
+use log::warn;
 use toml::{Table as TomlTable, Value};
 use dialoguer::{FuzzySelect, theme::ColorfulTheme};
 
@@ -20,7 +21,7 @@ pub fn select_env(root_dir: &Path) -> Result<()> {
         .interact()?;
 
     fs::write(root_dir.join(TARGET_FILE), &items[selection])?;
-    eprintln!("Target set to {}", items[selection]);
+    warn!("Target set to {}", items[selection]);
 
     Ok(())
 }

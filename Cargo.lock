@@ -312,6 +312,7 @@ dependencies = [
  "eyre",
  "httparse",
  "jsonpath",
+ "log",
  "minreq",
  "serde_json",
  "toml",
