@@ -11,10 +11,13 @@ use httparse::Status::*;
 use colored::*;
 use minreq::{Method, Request, Response};
 use serde_json::Value;
+use log::{log_enabled, info, Level, error};
 
 #[macro_use]
 mod util;
 use util::truncate;
+
+mod logging;
 
 mod env;
 use env::{select_env, find_root_dir, load_env, update_env};
@@ -26,9 +29,7 @@ mod substitute;
 use substitute::{substitute, SubstituteError};
 
 mod prompt;
-use prompt::{set_interactive_mode, set_verbose, is_verbose, set_quiet};
-
-use crate::prompt::is_quiet;
+use prompt::set_interactive_mode;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -53,6 +54,8 @@ struct Args {
 fn main() -> Result<()> {
     let args = Args::parse();
 
+    logging::init(args.verbose, args.quiet)?;
+
     let Some(root_dir) = find_root_dir()? else {
         bail!("No hitman.toml found");
     };
@@ -63,8 +66,6 @@ fn main() -> Result<()> {
     }
 
     set_interactive_mode(true);
-    set_verbose(args.verbose);
-    set_quiet(args.quiet);
 
     let cwd = current_dir()?;
 
@@ -91,7 +92,7 @@ fn main() -> Result<()> {
                             match e.downcast_ref() {
                                 Some(SubstituteError::UserCancelled) => {},
                                 _ => {
-                                    eprintln!("{}", e);
+                                    error!("{}", e);
                                 }
                             }
                         }
@@ -108,9 +109,7 @@ fn make_request(root_dir: &Path, file_path: &Path) -> Result<()> {
 
     let buf = substitute(&read_to_string(file_path)?, &env)?;
 
-    if is_verbose() {
-        print_request(&buf)?;
-    }
+    print_request(&buf);
 
     let mut headers = [httparse::EMPTY_HEADER; 64];
     let mut req = httparse::Request::new(&mut headers);
@@ -150,20 +149,20 @@ fn to_method(input: &str) -> Method {
     Method::Custom(input.to_uppercase())
 }
 
-fn print_request(buf: &str) -> Result<()> {
-    for line in buf.lines() {
-        eprintln!("> {}", truncate(line).blue());
+fn print_request(buf: &str) {
+    if log_enabled!(Level::Info) {
+        for line in buf.lines() {
+            info!("> {}", truncate(line).cyan());
+        }
+
+        info!("");
     }
-
-    eprintln!("");
-
-    Ok(())
 }
 
 fn print_response(res: &Response) -> Result<()> {
-    if !is_quiet() {
+    if log_enabled!(Level::Info) {
         let status = format!("HTTP/1.1 {} {}", res.status_code, res.reason_phrase);
-        eprintln!("< {}", status.cyan());
+        info!("< {}", status.cyan());
 
         let mut head = String::new();
         for (name, value) in &res.headers {
@@ -171,10 +170,10 @@ fn print_response(res: &Response) -> Result<()> {
         }
 
         for line in head.lines() {
-            eprintln!("< {}", truncate(line).cyan());
+            info!("< {}", truncate(line).cyan());
         }
 
-        eprintln!();
+        info!("");
     }
 
     // FIXME Check if content type is JSON

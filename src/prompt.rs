@@ -18,19 +18,3 @@ pub fn set_interactive_mode(enable: bool) {
 pub fn is_interactive_mode() -> bool {
     get_boolean("interactive")
 }
-
-pub fn set_verbose(enable: bool) {
-    set_boolean("verbose", enable);
-}
-
-pub fn is_verbose() -> bool {
-    get_boolean("verbose")
-}
-
-pub fn set_quiet(enable: bool) {
-    set_boolean("quiet", enable);
-}
-
-pub fn is_quiet() -> bool {
-    get_boolean("quiet")
-}
