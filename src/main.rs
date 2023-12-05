@@ -1,6 +1,7 @@
 use dialoguer::FuzzySelect;
 use dialoguer::theme::ColorfulTheme;
-use eyre::Result;
+use eyre::{Result, bail};
+use clap::Parser;
 use std::fs::read_to_string;
 use std::path::{Path, PathBuf};
 use std::str;
@@ -27,13 +28,24 @@ use substitute::{substitute, SubstituteError};
 mod prompt;
 use prompt::set_interactive_mode;
 
+#[derive(Parser, Debug)]
+#[command(author, version, about, long_about = None)]
+struct Args {
+    /// The name of a request file to execute
+    name: Option<String>,
+
+    #[arg(short, long)]
+    select: bool,
+}
+
 fn main() -> Result<()> {
-    let args: Vec<String> = std::env::args().collect();
+    let args = Args::parse();
 
-    let root_dir = find_root_dir()?;
-    eprintln!("Root dir: {}", root_dir.display());
+    let Some(root_dir) = find_root_dir()? else {
+        bail!("No hitman.toml found");
+    };
 
-    if args.iter().any(|a| a.eq("--select")) {
+    if args.select {
         select_env(&root_dir)?;
         return Ok(());
     }
@@ -42,7 +54,7 @@ fn main() -> Result<()> {
 
     let cwd = current_dir()?;
 
-    if let Some(file_path) = args.get(1) {
+    if let Some(file_path) = args.name {
         make_request(&root_dir, &cwd.join(file_path))
     } else {
         loop {

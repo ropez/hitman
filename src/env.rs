@@ -27,16 +27,16 @@ pub fn select_env(root_dir: &Path) -> Result<()> {
 
 // The root dir is where we find hitman.toml,
 // scanning parent directories until we find it
-pub fn find_root_dir() -> Result<PathBuf> {
+pub fn find_root_dir() -> Result<Option<PathBuf>> {
     let mut dir = current_dir()?;
     let res = loop {
         if dir.join(CONFIG_FILE).exists() {
-            break dir;
+            break Some(dir);
         }
         if let Some(parent) = dir.parent() {
             dir = parent.to_path_buf();
         } else {
-            break dir;
+            break None;
         }
     };
 
