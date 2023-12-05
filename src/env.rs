@@ -1,7 +1,7 @@
 use std::fs::{self, read_to_string};
 use std::path::{Path, PathBuf};
 use std::env::current_dir;
-use eyre::Result;
+use eyre::{Result, bail};
 use toml::{Table as TomlTable, Value};
 use dialoguer::{FuzzySelect, theme::ColorfulTheme};
 
@@ -71,7 +71,7 @@ pub fn load_env(root_dir: &Path, file_path: &Path) -> Result<TomlTable> {
     if let Some(Table(t)) = config.get(&target) {
         env.extend(t.clone());
     } else {
-        return err!("`{}` not found in config", target);
+        bail!("`{}` not found in config", target);
     }
 
     match read_toml(&file_path.with_extension("http.toml")).ok() {
