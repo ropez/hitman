@@ -1,6 +1,8 @@
 use eyre::{Result, eyre, bail};
 use toml::{Table, Value};
 use colored::*;
+use crate::prompt::is_verbose;
+
 use super::util::truncate;
 use jsonpath::Selector;
 use serde_json::Value as JsonValue;
@@ -18,8 +20,10 @@ pub fn extract_variables(data: &JsonValue, scope: &Table) -> Result<Table> {
 
                         if let Some(JsonValue::String(val)) = selector.find(&data).next() {
                             // FIXME Structured logging, abbreiate long values
-                            let msg = format!("# Got '{}' = '{}'", key, val);
-                            eprintln!("{}", truncate(&msg).yellow());
+                            if is_verbose() {
+                                let msg = format!("# Got '{}' = '{}'", key, val);
+                                eprintln!("{}", truncate(&msg).yellow());
+                            }
 
                             out.insert(key.clone(), Value::String(String::from(val)));
                         }
@@ -48,8 +52,10 @@ pub fn extract_variables(data: &JsonValue, scope: &Table) -> Result<Table> {
                                 toml_items.push(Value::Table(toml_item));
                             }
 
-                            let msg = format!("# Got '{}' with {} elements", key, toml_items.len());
-                            eprintln!("{}", truncate(&msg).yellow());
+                            if is_verbose() {
+                                let msg = format!("# Got '{}' with {} elements", key, toml_items.len());
+                                eprintln!("{}", truncate(&msg).yellow());
+                            }
 
                             out.insert(key.clone(), Value::Array(toml_items));
                         }
