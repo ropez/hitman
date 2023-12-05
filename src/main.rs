@@ -26,16 +26,28 @@ mod substitute;
 use substitute::{substitute, SubstituteError};
 
 mod prompt;
-use prompt::set_interactive_mode;
+use prompt::{set_interactive_mode, set_verbose, is_verbose, set_quiet};
+
+use crate::prompt::is_quiet;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
-    /// The name of a request file to execute
+    /// The name of a request file to execute and exit.
+    /// Omit this argument to run an interactive prompt.
     name: Option<String>,
 
+    /// Select a target from the config file
     #[arg(short, long)]
     select: bool,
+
+    /// Show more output
+    #[arg(short, long)]
+    verbose: bool,
+
+    /// Show no output except the returned data
+    #[arg(short, long)]
+    quiet: bool,
 }
 
 fn main() -> Result<()> {
@@ -51,6 +63,8 @@ fn main() -> Result<()> {
     }
 
     set_interactive_mode(true);
+    set_verbose(args.verbose);
+    set_quiet(args.quiet);
 
     let cwd = current_dir()?;
 
@@ -94,7 +108,9 @@ fn make_request(root_dir: &Path, file_path: &Path) -> Result<()> {
 
     let buf = substitute(&read_to_string(file_path)?, &env)?;
 
-    print_request(&buf)?;
+    if is_verbose() {
+        print_request(&buf)?;
+    }
 
     let mut headers = [httparse::EMPTY_HEADER; 64];
     let mut req = httparse::Request::new(&mut headers);
@@ -145,26 +161,27 @@ fn print_request(buf: &str) -> Result<()> {
 }
 
 fn print_response(res: &Response) -> Result<()> {
-    let status = format!("HTTP/1.1 {} {}", res.status_code, res.reason_phrase);
-    eprintln!("< {}", status.cyan());
+    if !is_quiet() {
+        let status = format!("HTTP/1.1 {} {}", res.status_code, res.reason_phrase);
+        eprintln!("< {}", status.cyan());
 
-    let mut head = String::new();
-    for (name, value) in &res.headers {
-        head.push_str(&format!("{}: {}\n", name, value));
-    }
+        let mut head = String::new();
+        for (name, value) in &res.headers {
+            head.push_str(&format!("{}: {}\n", name, value));
+        }
 
-    for line in head.lines() {
-        eprintln!("< {}", truncate(line).cyan());
+        for line in head.lines() {
+            eprintln!("< {}", truncate(line).cyan());
+        }
+
+        eprintln!();
     }
 
     // FIXME Check if content type is JSON
 
     if let Ok(json) = res.json::<Value>() {
-        eprintln!();
         println!("{}", serde_json::to_string_pretty(&json)?);
     }
-
-    eprintln!();
 
     Ok(())
 }
