@@ -1,4 +1,4 @@
-use eyre::{Result, eyre};
+use eyre::{Result, eyre, bail};
 use toml::{Table, Value};
 use colored::*;
 use super::util::truncate;
@@ -54,11 +54,11 @@ pub fn extract_variables(data: &JsonValue, scope: &Table) -> Result<Table> {
                             out.insert(key.clone(), Value::Array(toml_items));
                         }
                     },
-                    _ => return err!("Invalid _extract rule: {}", value),
+                    _ => bail!("Invalid _extract rule: {}", value),
                 }
             }
         },
-        Some(_) => return err!("Invalid _extract section"),
+        Some(_) => bail!("Invalid _extract section"),
         None => {},
     }
 
@@ -88,7 +88,7 @@ fn make_selector(path: &str) -> Result<Selector> {
 fn get_string(table: &Table, key: &str) -> Result<String> {
     match table.get(key) {
         Some(Value::String(s)) => Ok(s.clone()),
-        _ => err!("Required key not found: {}", key),
+        _ => bail!("Required key not found: {}", key),
     }
 }
 

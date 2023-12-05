@@ -1,5 +1,5 @@
 use std::str;
-use eyre::Result;
+use eyre::{Result, bail};
 use toml::{Table, Value};
 use derive_more::{Display, Error};
 use dialoguer::{Input, theme::ColorfulTheme, FuzzySelect};
@@ -28,9 +28,8 @@ pub fn substitute(input: &str, env: &Table) -> Result<String> {
         loop {
             match slice.find("{{") {
                 None => {
-                    match slice.find("}}") {
-                        Some(_) => return err!(SubstituteError::SyntaxError),
-                        None => {},
+                    if slice.find("}}").is_some() {
+                        bail!(SubstituteError::SyntaxError)
                     }
                     output.push_str(slice);
                     break;
@@ -40,7 +39,7 @@ pub fn substitute(input: &str, env: &Table) -> Result<String> {
                     slice = &slice[pos..];
 
                     let Some(end) = slice.find("}}").map(|i| i + 2) else {
-                        return err!(SubstituteError::SyntaxError);
+                        bail!(SubstituteError::SyntaxError);
                     };
 
                     let rep = find_replacement(&slice[2 .. end - 2], env)?;
@@ -70,10 +69,10 @@ fn find_replacement(placeholder: &str, env: &Table) -> Result<String> {
             if is_interactive_mode() {
                 Ok(select_replacement(key, &arr)?)
             } else {
-                err!(SubstituteError::ReplacementNotFound)
+                bail!(SubstituteError::ReplacementNotFound)
             }
         }
-        Some(_) => err!(SubstituteError::TypeNotSupported),
+        Some(_) => bail!(SubstituteError::TypeNotSupported),
         None => {
             let fallback = parts.next().map(|fb| fb.trim());
 
@@ -114,12 +113,12 @@ fn select_replacement(key: &str, values: &Vec<Value>) -> Result<String> {
             match &values[index] {
                 Value::Table(t) => match t.get("value") {
                     Some(value) => Ok(value.to_string()),
-                    _ => err!(SubstituteError::ReplacementNotFound),
+                    _ => bail!(SubstituteError::ReplacementNotFound),
                 },
                 other => Ok(other.to_string()),
             }
         },
-        None => err!(SubstituteError::UserCancelled),
+        None => bail!(SubstituteError::UserCancelled),
     }
 }
 
