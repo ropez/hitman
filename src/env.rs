@@ -55,7 +55,7 @@ fn find_environments(config: &TomlTable) -> Result<Vec<String>> {
     return Ok(keys);
 }
 
-pub fn load_env(root_dir: &Path, file_path: &Path) -> Result<TomlTable> {
+pub fn load_env(root_dir: &Path, file_path: &Path, options: &Vec<(String, String)>) -> Result<TomlTable> {
     use Value::Table;
 
     let target = read_to_string(root_dir.join(TARGET_FILE))
@@ -86,6 +86,10 @@ pub fn load_env(root_dir: &Path, file_path: &Path) -> Result<TomlTable> {
     match read_toml(&root_dir.join(DATA_FILE)).ok() {
         Some(content) => env.extend(content),
         None => (),
+    }
+
+    for (k, v) in options {
+        env.insert(k.clone(), Value::String(v.clone()));
     }
 
     Ok(env)

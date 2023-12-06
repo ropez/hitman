@@ -1,7 +1,7 @@
 use dialoguer::FuzzySelect;
 use dialoguer::theme::ColorfulTheme;
 use eyre::{Result, bail};
-use clap::Parser;
+use toml::Table;
 use std::fs::read_to_string;
 use std::path::{Path, PathBuf};
 use std::str;
@@ -11,6 +11,8 @@ use httparse::Status::*;
 use minreq::{Method, Request, Response};
 use serde_json::Value;
 use log::{log_enabled, info, Level, error};
+
+mod cli;
 
 #[macro_use]
 mod util;
@@ -30,28 +32,8 @@ use substitute::{substitute, SubstituteError};
 mod prompt;
 use prompt::set_interactive_mode;
 
-#[derive(Parser, Debug)]
-#[command(author, version, about, long_about = None)]
-struct Args {
-    /// The name of a request file to execute and exit.
-    /// Omit this argument to run an interactive prompt.
-    name: Option<String>,
-
-    /// Select a target from the config file
-    #[arg(short, long)]
-    select: bool,
-
-    /// Show more output
-    #[arg(short, long)]
-    verbose: bool,
-
-    /// Show no output except the returned data
-    #[arg(short, long)]
-    quiet: bool,
-}
-
 fn main() -> Result<()> {
-    let args = Args::parse();
+    let args = cli::parse_args();
 
     logging::init(args.verbose, args.quiet)?;
 
@@ -69,7 +51,9 @@ fn main() -> Result<()> {
     let cwd = current_dir()?;
 
     if let Some(file_path) = args.name {
-        make_request(&root_dir, &cwd.join(file_path))
+        let file_path = cwd.join(file_path);
+        let env = load_env(&root_dir, &file_path, &args.options)?;
+        make_request(&file_path, &env)
     } else {
         loop {
             let files = find_available_requests(&cwd)?;
@@ -85,7 +69,8 @@ fn main() -> Result<()> {
                 Some(index) => {
                     let file_path = &files[index];
 
-                    match make_request(&root_dir, &cwd.join(file_path)) {
+                    let env = load_env(&root_dir, file_path, &args.options)?;
+                    match make_request(&cwd.join(file_path), &env) {
                         Ok(()) => (),
                         Err(e) => {
                             match e.downcast_ref() {
@@ -103,9 +88,7 @@ fn main() -> Result<()> {
     }
 }
 
-fn make_request(root_dir: &Path, file_path: &Path) -> Result<()> {
-    let env = load_env(root_dir, file_path)?;
-
+fn make_request(file_path: &Path, env: &Table) -> Result<()> {
     let buf = substitute(&read_to_string(file_path)?, &env)?;
 
     print_request(&buf);
