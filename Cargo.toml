@@ -18,3 +18,5 @@ dialoguer = { version = "0.11.0", features = ["fuzzy-select"] }
 clap = { version = "4.4", features = ["derive"] }
 log = { version = "0.4.20", features = ["std"] }
 termcolor = "1.4.0"
+inquire = { version = "0.6.2", features = ["date"] }
+chrono = "0.4.31"
