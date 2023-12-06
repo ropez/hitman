@@ -70,7 +70,13 @@ fn main() -> Result<()> {
                     let file_path = &files[index];
 
                     let env = load_env(&root_dir, file_path, &args.options)?;
-                    match make_request(&cwd.join(file_path), &env) {
+
+                    let result = make_request(&cwd.join(file_path), &env);
+                    if !args.repeat {
+                        break result;
+                    }
+
+                    match result {
                         Ok(()) => (),
                         Err(e) => {
                             match e.downcast_ref() {
