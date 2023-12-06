@@ -1,7 +1,6 @@
 use eyre::{Result, eyre, bail};
 use log::info;
 use toml::{Table, Value};
-use colored::*;
 
 use super::util::truncate;
 use jsonpath::Selector;
@@ -20,7 +19,7 @@ pub fn extract_variables(data: &JsonValue, scope: &Table) -> Result<Table> {
 
                         if let Some(JsonValue::String(val)) = selector.find(&data).next() {
                             let msg = format!("# Got '{}' = '{}'", key, val);
-                            info!("{}", truncate(&msg).yellow());
+                            info!("{}", truncate(&msg));
 
                             out.insert(key.clone(), Value::String(String::from(val)));
                         }
@@ -50,7 +49,7 @@ pub fn extract_variables(data: &JsonValue, scope: &Table) -> Result<Table> {
                             }
 
                             let msg = format!("# Got '{}' with {} elements", key, toml_items.len());
-                            info!("{}", truncate(&msg).yellow());
+                            info!("{}", truncate(&msg));
 
                             out.insert(key.clone(), Value::Array(toml_items));
                         }
