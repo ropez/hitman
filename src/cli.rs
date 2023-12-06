@@ -13,6 +13,11 @@ pub struct Args {
     #[arg(value_parser = parse_key_val)]
     pub options: Vec<(String, String)>,
 
+    /// When running interactively (no name argument specified),
+    /// repeat asking for requests until cancelled.
+    #[arg(short, long)]
+    pub repeat: bool,
+
     /// Select a target from the config file
     #[arg(short, long)]
     pub select: bool,
