@@ -2,8 +2,7 @@ use std::str;
 use eyre::{Result, bail};
 use toml::{Table, Value};
 use derive_more::{Display, Error};
-use dialoguer::{Input, theme::ColorfulTheme, FuzzySelect};
-use inquire::DateSelect;
+use inquire::{Select, DateSelect, Text, list_option::ListOption};
 use crate::prompt::is_interactive_mode;
 
 #[derive(Display, Error, Debug, Clone)]
@@ -16,9 +15,6 @@ pub enum SubstituteError {
 
     #[display(fmt = "Type not supported")]
     TypeNotSupported,
-
-    #[display(fmt = "User cancelled")]
-    UserCancelled,
 }
 
 pub fn substitute(input: &str, env: &Table) -> Result<String> {
@@ -89,54 +85,51 @@ fn find_replacement(placeholder: &str, env: &Table) -> Result<String> {
 }
 
 fn select_replacement(key: &str, values: &Vec<Value>) -> Result<String> {
-    let display_names: Vec<String> = values
+    let list_options: Vec<ListOption<String>> = values
         .clone()
         .into_iter()
-        .map(|v| match v {
-            Value::Table(t) => {
-                match t.get("name") {
-                    Some(value) => value.to_string(),
-                    None => t.to_string(),
+        .enumerate()
+        .map(|(i, v)| 
+            ListOption::new(
+                i,
+                match v {
+                    Value::Table(t) => {
+                        match t.get("name") {
+                            Some(value) => value.to_string(),
+                            None => t.to_string(),
+                        }
+                    },
+                    other => other.to_string(),
                 }
-            },
-            other => other.to_string(),
-        })
+            )
+        )
         .collect();
 
-    // How to abort on escape?
-    let index_opt = FuzzySelect::with_theme(&ColorfulTheme::default())
-        .with_prompt(format!("Select value for {}", key))
-        .items(&display_names)
-        .interact_opt()?;
+    let selected = Select::new(
+        &format!("Select value for {}", key),
+        list_options.clone())
+        .with_page_size(15)
+        .prompt()?;
 
-    match index_opt {
-        Some(index) => {
-            match &values[index] {
-                Value::Table(t) => match t.get("value") {
-                    Some(value) => Ok(value.to_string()),
-                    _ => bail!(SubstituteError::ReplacementNotFound),
-                },
-                other => Ok(other.to_string()),
-            }
+    match &values[selected.index] {
+        Value::Table(t) => match t.get("value") {
+            Some(value) => Ok(value.to_string()),
+            _ => bail!(SubstituteError::ReplacementNotFound),
         },
-        None => bail!(SubstituteError::UserCancelled),
+        other => Ok(other.to_string()),
     }
 }
 
 fn prompt_user(key: &str, fallback: Option<&str>) -> Result<String> {
     let fb = fallback.unwrap_or("");
 
-    // Issue: Can't cancel here
-    // https://github.com/console-rs/dialoguer/issues/160
-
     if key.ends_with("Date") {
         return prompt_for_date(key);
     }
 
-    let input = Input::with_theme(&ColorfulTheme::default())
-        .with_prompt(format!("Enter value for {}", key))
-        .default(fb.to_string())
-        .interact_text()?;
+    let input = Text::new(&format!("Enter value for {}", key))
+        .with_default(fb)
+        .prompt()?;
 
     Ok(input)
 }
