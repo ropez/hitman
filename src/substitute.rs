@@ -3,6 +3,7 @@ use eyre::{Result, bail};
 use toml::{Table, Value};
 use derive_more::{Display, Error};
 use dialoguer::{Input, theme::ColorfulTheme, FuzzySelect};
+use inquire::DateSelect;
 use crate::prompt::is_interactive_mode;
 
 #[derive(Display, Error, Debug, Clone)]
@@ -77,7 +78,7 @@ fn find_replacement(placeholder: &str, env: &Table) -> Result<String> {
             let fallback = parts.next().map(|fb| fb.trim());
 
             if is_interactive_mode() {
-                Ok(prompt_user(key, fallback).unwrap())
+                Ok(prompt_user(key, fallback)?)
             } else {
                 fallback
                     .map(|f| f.to_string())
@@ -128,12 +129,25 @@ fn prompt_user(key: &str, fallback: Option<&str>) -> Result<String> {
     // Issue: Can't cancel here
     // https://github.com/console-rs/dialoguer/issues/160
 
+    if key.ends_with("Date") {
+        return prompt_for_date(key);
+    }
+
     let input = Input::with_theme(&ColorfulTheme::default())
         .with_prompt(format!("Enter value for {}", key))
         .default(fb.to_string())
         .interact_text()?;
 
     Ok(input)
+}
+
+fn prompt_for_date(key: &str) -> Result<String> {
+    let msg = format!("Select a date for {}", key);
+    let date = DateSelect::new(&msg)
+        .with_week_start(chrono::Weekday::Mon)
+        .prompt()?;
+
+    Ok(date.format("%Y-%m-%d").to_string())
 }
 
 #[cfg(test)]

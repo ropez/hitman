@@ -50,7 +50,7 @@ fn main() -> Result<()> {
 
     let cwd = current_dir()?;
 
-    if let Some(file_path) = args.name {
+    let result = if let Some(file_path) = args.name {
         let file_path = cwd.join(file_path);
         let env = load_env(&root_dir, &file_path, &args.options)?;
         make_request(&file_path, &env)
@@ -79,11 +79,8 @@ fn main() -> Result<()> {
                     match result {
                         Ok(()) => (),
                         Err(e) => {
-                            match e.downcast_ref() {
-                                Some(SubstituteError::UserCancelled) => {},
-                                _ => {
-                                    error!("{}", e);
-                                }
+                            if !is_user_cancelation(&e) {
+                                error!("{}", e);
                             }
                         }
                     }
@@ -91,7 +88,24 @@ fn main() -> Result<()> {
                 None => break Ok(()),
             };
         }
+    };
+
+    // FIXME Must be a way to make this nicer
+    match &result {
+        Ok(()) => result,
+        Err(e) => {
+            if is_user_cancelation(&e) {
+                Ok(())
+            } else {
+                result
+            }
+        }
     }
+}
+
+fn is_user_cancelation(err: &eyre::Report) -> bool {
+    matches!(err.downcast_ref(), Some(SubstituteError::UserCancelled)) ||
+    matches!(err.downcast_ref(), Some(inquire::InquireError::OperationCanceled))
 }
 
 fn make_request(file_path: &Path, env: &Table) -> Result<()> {
