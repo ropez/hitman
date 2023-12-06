@@ -7,11 +7,13 @@ use toml::{Table as TomlTable, Value};
 use dialoguer::{FuzzySelect, theme::ColorfulTheme};
 
 const CONFIG_FILE: &str = "hitman.toml";
+const LOCAL_CONFIG_FILE: &str = "hitman.local.toml";
 const TARGET_FILE: &str = ".hitman-target";
 const DATA_FILE: &str = ".hitman-data.toml";
 
 pub fn select_env(root_dir: &Path) -> Result<()> {
-    let items = find_environments(&read_toml(&root_dir.join(CONFIG_FILE))?)?;
+    let config = read_and_merge_config(root_dir)?;
+    let items = find_environments(&config)?;
 
     // Alternative crate: inquire
 
@@ -62,7 +64,7 @@ pub fn load_env(root_dir: &Path, file_path: &Path) -> Result<TomlTable> {
 
     let mut env = TomlTable::new();
 
-    let config = read_toml(&root_dir.join(CONFIG_FILE))?;
+    let config = read_and_merge_config(&root_dir)?;
 
     // Global defaults
     env.extend(config.clone()
@@ -104,6 +106,17 @@ pub fn update_env(vars: &TomlTable) -> Result<()> {
     Ok(())
 }
 
+fn read_and_merge_config(root_dir: &Path) -> Result<TomlTable> {
+    let mut config = TomlTable::new();
+
+    config.extend(read_toml(&root_dir.join(CONFIG_FILE))?);
+
+    if let Some(local) = read_toml(&root_dir.join(LOCAL_CONFIG_FILE)).ok() {
+        config.extend(local);
+    }
+
+    Ok(config)
+}
 
 fn read_toml(file_path: &Path) -> Result<TomlTable> {
     let content = fs::read_to_string(file_path)?;
