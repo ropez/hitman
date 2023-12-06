@@ -4,7 +4,7 @@ use std::env::current_dir;
 use eyre::{Result, bail};
 use log::warn;
 use toml::{Table as TomlTable, Value};
-use dialoguer::{FuzzySelect, theme::ColorfulTheme};
+use inquire::Select;
 
 const CONFIG_FILE: &str = "hitman.toml";
 const LOCAL_CONFIG_FILE: &str = "hitman.local.toml";
@@ -15,15 +15,12 @@ pub fn select_env(root_dir: &Path) -> Result<()> {
     let config = read_and_merge_config(root_dir)?;
     let items = find_environments(&config)?;
 
-    // Alternative crate: inquire
+    let selected = Select::new("Select target", items.clone())
+        .with_page_size(15)
+        .prompt()?;
 
-    let selection = FuzzySelect::with_theme(&ColorfulTheme::default())
-        .with_prompt("Select target")
-        .items(&items)
-        .interact()?;
-
-    fs::write(root_dir.join(TARGET_FILE), &items[selection])?;
-    warn!("Target set to {}", items[selection]);
+    fs::write(root_dir.join(TARGET_FILE), &selected)?;
+    warn!("Target set to {}", &selected);
 
     Ok(())
 }

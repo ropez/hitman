@@ -1,11 +1,10 @@
-use dialoguer::FuzzySelect;
-use dialoguer::theme::ColorfulTheme;
 use eyre::{Result, bail};
 use toml::Table;
 use std::fs::read_to_string;
 use std::path::{Path, PathBuf};
 use std::str;
 use std::env::current_dir;
+use inquire::{Select, list_option::ListOption};
 use walkdir::WalkDir;
 use httparse::Status::*;
 use minreq::{Method, Request, Response};
@@ -27,7 +26,7 @@ mod extract;
 use extract::extract_variables;
 
 mod substitute;
-use substitute::{substitute, SubstituteError};
+use substitute::substitute;
 
 mod prompt;
 use prompt::set_interactive_mode;
@@ -57,36 +56,34 @@ fn main() -> Result<()> {
     } else {
         loop {
             let files = find_available_requests(&cwd)?;
-            let display_names = files.iter().map(|p| p.display()).collect::<Vec<_>>();
+            let options: Vec<ListOption<String>> = files.iter()
+                .enumerate()
+                .map(|(i, p)| 
+                    ListOption::new(i, p.display().to_string())
+                ).collect::<Vec<_>>();
 
             eprintln!();
-            let selection = FuzzySelect::with_theme(&ColorfulTheme::default())
-                .with_prompt("Make request")
-                .items(&display_names)
-                .interact_opt()?;
+            let selected = Select::new("Select request", options)
+                .with_page_size(15)
+                .prompt()?;
 
-            match selection {
-                Some(index) => {
-                    let file_path = &files[index];
+            let file_path = &files[selected.index];
 
-                    let env = load_env(&root_dir, file_path, &args.options)?;
+            let env = load_env(&root_dir, file_path, &args.options)?;
 
-                    let result = make_request(&cwd.join(file_path), &env);
-                    if !args.repeat {
-                        break result;
+            let result = make_request(&cwd.join(file_path), &env);
+            if !args.repeat {
+                break result;
+            }
+
+            match result {
+                Ok(()) => (),
+                Err(e) => {
+                    if !is_user_cancelation(&e) {
+                        error!("{}", e);
                     }
-
-                    match result {
-                        Ok(()) => (),
-                        Err(e) => {
-                            if !is_user_cancelation(&e) {
-                                error!("{}", e);
-                            }
-                        }
-                    }
-                },
-                None => break Ok(()),
-            };
+                }
+            }
         }
     };
 
@@ -104,8 +101,8 @@ fn main() -> Result<()> {
 }
 
 fn is_user_cancelation(err: &eyre::Report) -> bool {
-    matches!(err.downcast_ref(), Some(SubstituteError::UserCancelled)) ||
-    matches!(err.downcast_ref(), Some(inquire::InquireError::OperationCanceled))
+    matches!(err.downcast_ref(), Some(inquire::InquireError::OperationCanceled)) ||
+    matches!(err.downcast_ref(), Some(inquire::InquireError::OperationInterrupted))
 }
 
 fn make_request(file_path: &Path, env: &Table) -> Result<()> {
