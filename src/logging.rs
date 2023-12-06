@@ -1,3 +1,8 @@
+use std::io::{
+    self,
+    Write,
+    IsTerminal,
+};
 use log::{
     Level, 
     LevelFilter,
@@ -8,24 +13,17 @@ use log::{
     set_boxed_logger, 
     set_max_level, 
 };
+use termcolor::{
+    Color,
+    ColorChoice,
+    ColorSpec,
+    StandardStream,
+    WriteColor,
+};
 
-pub struct Logger {
+struct Logger {
     level: Level,
-}
-
-pub fn init(verbose: bool, quiet: bool) -> Result<(), SetLoggerError> {
-    let logger = Logger {
-        level: match (verbose, quiet) {
-            (true, false) => Level::Debug,
-            (false, true) => Level::Error,
-            _ => Level::Info,
-        }
-    };
-
-    set_boxed_logger(Box::new(logger))?;
-    set_max_level(LevelFilter::Info);
-
-    Ok(())
+    color: ColorChoice,
 }
 
 impl Log for Logger {
@@ -35,9 +33,50 @@ impl Log for Logger {
 
     fn log(&self, record: &Record) {
         if self.enabled(record.metadata()) {
-            eprintln!("{}", record.args());
+            let mut stream: StandardStream = StandardStream::stderr(self.color);
+            let msg = format!("{}", record.args());
+            if msg.starts_with("<") {
+                stream.set_color(
+                    ColorSpec::new().set_fg(Some(Color::Cyan))
+                ).ok();
+            } else if msg.starts_with(">") {
+                stream.set_color(
+                    ColorSpec::new().set_fg(Some(Color::Blue))
+                ).ok();
+            } else if msg.starts_with("#") {
+                stream.set_color(
+                    ColorSpec::new().set_fg(Some(Color::Yellow))
+                ).ok();
+            }
+            writeln!(&mut stream, "{}", record.args()).unwrap_or_else(|_| {
+                eprintln!("{}", record.args());
+            });
+            stream.reset().ok();
         }
     }
 
-    fn flush(&self) {}
+    fn flush(&self) {
+        io::stderr().flush().ok();
+    }
 }
+
+pub fn init(verbose: bool, quiet: bool) -> Result<(), SetLoggerError> {
+    let logger = Logger {
+        level: match (verbose, quiet) {
+            (true, false) => Level::Debug,
+            (false, true) => Level::Error,
+            _ => Level::Info,
+        },
+        color: if io::stderr().is_terminal() {
+            ColorChoice::Auto
+        } else {
+            ColorChoice::Never
+        },
+    };
+
+    set_boxed_logger(Box::new(logger))?;
+    set_max_level(LevelFilter::Info);
+
+    Ok(())
+}
+

@@ -8,7 +8,6 @@ use std::str;
 use std::env::current_dir;
 use walkdir::WalkDir;
 use httparse::Status::*;
-use colored::*;
 use minreq::{Method, Request, Response};
 use serde_json::Value;
 use log::{log_enabled, info, Level, error};
@@ -152,7 +151,7 @@ fn to_method(input: &str) -> Method {
 fn print_request(buf: &str) {
     if log_enabled!(Level::Info) {
         for line in buf.lines() {
-            info!("> {}", truncate(line).cyan());
+            info!("> {}", truncate(line));
         }
 
         info!("");
@@ -161,8 +160,7 @@ fn print_request(buf: &str) {
 
 fn print_response(res: &Response) -> Result<()> {
     if log_enabled!(Level::Info) {
-        let status = format!("HTTP/1.1 {} {}", res.status_code, res.reason_phrase);
-        info!("< {}", status.cyan());
+        info!("HTTP/1.1 {} {}", res.status_code, res.reason_phrase);
 
         let mut head = String::new();
         for (name, value) in &res.headers {
@@ -170,7 +168,7 @@ fn print_response(res: &Response) -> Result<()> {
         }
 
         for line in head.lines() {
-            info!("< {}", truncate(line).cyan());
+            info!("< {}", truncate(line));
         }
 
         info!("");
