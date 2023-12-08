@@ -139,11 +139,16 @@ fn prompt_user(key: &str, fallback: Option<&str>) -> Result<String> {
 
 fn prompt_for_date(key: &str) -> Result<Option<String>> {
     let msg = format!("Select a date for {}", key);
+    let formatter = |date: chrono::NaiveDate| {
+        date.format("%Y-%m-%d").to_string()
+    };
+
     let res = DateSelect::new(&msg)
         .with_week_start(chrono::Weekday::Mon)
+        .with_formatter(&formatter)
         .prompt_skippable()?;
 
-    Ok(res.map(|date| date.format("%Y-%m-%d").to_string()))
+    Ok(res.map(formatter))
 }
 
 #[cfg(test)]
