@@ -133,9 +133,13 @@ fn make_request(file_path: &Path, env: &Table) -> Result<()> {
         request = request.with_header(String::from(header.name), value);
     }
 
+    let t = std::time::Instant::now();
     let response = request.send()?;
 
+    let elapsed = t.elapsed();
+
     print_response(&response)?;
+    info!("# Request completed in {:.2?}", elapsed);
 
     if let Ok(json) = response.json::<Value>() {
         let vars = extract_variables(&json, &env)?;
