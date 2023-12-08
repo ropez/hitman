@@ -1,4 +1,4 @@
-use eyre::{Result, eyre, bail};
+use eyre::{bail, eyre, Result};
 use log::info;
 use toml::{Table, Value};
 
@@ -23,7 +23,7 @@ pub fn extract_variables(data: &JsonValue, scope: &Table) -> Result<Table> {
 
                             out.insert(key.clone(), Value::String(String::from(val)));
                         }
-                    },
+                    }
                     Value::Table(conf) => {
                         let items_selector = make_selector(&get_string(&conf, "_")?)?;
                         let value_selectors = make_item_selectors(&conf)?;
@@ -53,13 +53,13 @@ pub fn extract_variables(data: &JsonValue, scope: &Table) -> Result<Table> {
 
                             out.insert(key.clone(), Value::Array(toml_items));
                         }
-                    },
+                    }
                     _ => bail!("Invalid _extract rule: {}", value),
                 }
             }
-        },
+        }
         Some(_) => bail!("Invalid _extract section"),
-        None => {},
+        None => {}
     }
 
     Ok(out)
@@ -68,9 +68,9 @@ pub fn extract_variables(data: &JsonValue, scope: &Table) -> Result<Table> {
 fn make_item_selectors(conf: &Table) -> Result<Vec<(String, Selector)>> {
     conf.iter()
         .filter_map(|(k, v)| {
-            if k == "_" { 
-                None 
-            } else { 
+            if k == "_" {
+                None
+            } else {
                 if let Value::String(s) = v {
                     Some(make_selector(s).map(|r| (k.to_string(), r)))
                 } else {
@@ -98,42 +98,58 @@ mod tests {
 
     #[test]
     fn extracts_variables_from_json() {
-        let env = toml::from_str(r#"
+        let env = toml::from_str(
+            r#"
         url = "example.com"
 
         [_extract]
         token = "$.Data.Token"
-        "#).unwrap();
+        "#,
+        )
+        .unwrap();
 
-        let data = serde_json::from_str(r#"{ 
+        let data = serde_json::from_str(
+            r#"{ 
             "Data": { "Token": "kokobaba1234" } 
-        }"#).unwrap();
+        }"#,
+        )
+        .unwrap();
 
         let res = extract_variables(&data, &env).unwrap();
 
         assert!(res.get("token").is_some());
-        assert_eq!(&Value::String(String::from("kokobaba1234")), res.get("token").unwrap());
+        assert_eq!(
+            &Value::String(String::from("kokobaba1234")),
+            res.get("token").unwrap()
+        );
     }
 
     #[test]
     fn extracts_multiple_values_into_array() {
         // workaround: Jsonpath crate doesn't support array
-        let env = toml::from_str(r#"
+        let env = toml::from_str(
+            r#"
         url = "example.com"
 
         [_extract]
         ToolId = { _ = "$.Tools", value = "$.ToolId", name = "$.Name" }
-        "#).unwrap();
+        "#,
+        )
+        .unwrap();
 
-        let data = serde_json::from_str(r#"{ 
+        let data = serde_json::from_str(
+            r#"{ 
             "Tools": [
                 { "Name": "First tool", "ToolId": 123 },
                 { "Name": "Second tool", "ToolId": 345 }
             ]
-        }"#).unwrap();
+        }"#,
+        )
+        .unwrap();
         let res = extract_variables(&data, &env).unwrap();
 
-        let expected: Table = toml::from_str(r#"
+        let expected: Table = toml::from_str(
+            r#"
             [[ToolId]]
             value = 123
             name = "First tool"
@@ -143,13 +159,11 @@ mod tests {
             value = 345
             name = "Second tool"
             _raw = "{\"Name\":\"Second tool\",\"ToolId\":345}"
-        "#).unwrap();
+        "#,
+        )
+        .unwrap();
 
         assert!(res.get("ToolId").is_some());
-        assert_eq!(
-            res.get("ToolId").unwrap(),
-            expected.get("ToolId").unwrap(),
-        );
+        assert_eq!(res.get("ToolId").unwrap(), expected.get("ToolId").unwrap(),);
     }
 }
-

@@ -6,4 +6,3 @@ pub fn truncate(s: &str) -> String {
         Some((idx, _)) => format!("{}...", &s[..idx]),
     }
 }
-

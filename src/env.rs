@@ -1,10 +1,10 @@
+use eyre::{bail, Result};
+use inquire::Select;
+use log::warn;
+use std::env::current_dir;
 use std::fs::{self, read_to_string};
 use std::path::{Path, PathBuf};
-use std::env::current_dir;
-use eyre::{Result, bail};
-use log::warn;
 use toml::{Table as TomlTable, Value};
-use inquire::Select;
 
 use crate::prompt::fuzzy_match;
 
@@ -47,15 +47,21 @@ pub fn find_root_dir() -> Result<Option<PathBuf>> {
 }
 
 fn find_environments(config: &TomlTable) -> Result<Vec<String>> {
-    let keys: Vec<String> = config.keys()
+    let keys: Vec<String> = config
+        .keys()
         .filter(|k| !k.starts_with("_"))
         .filter(|k| config.get(*k).expect("key must exist").is_table())
-        .map(|k| k.to_string()).collect();
+        .map(|k| k.to_string())
+        .collect();
 
     return Ok(keys);
 }
 
-pub fn load_env(root_dir: &Path, file_path: &Path, options: &Vec<(String, String)>) -> Result<TomlTable> {
+pub fn load_env(
+    root_dir: &Path,
+    file_path: &Path,
+    options: &Vec<(String, String)>,
+) -> Result<TomlTable> {
     use Value::Table;
 
     let target = read_to_string(root_dir.join(TARGET_FILE))
@@ -67,9 +73,13 @@ pub fn load_env(root_dir: &Path, file_path: &Path, options: &Vec<(String, String
     let config = read_and_merge_config(&root_dir)?;
 
     // Global defaults
-    env.extend(config.clone()
-        .into_iter().filter(|(_, v)| !v.is_table())
-        .collect::<Vec<_>>());
+    env.extend(
+        config
+            .clone()
+            .into_iter()
+            .filter(|(_, v)| !v.is_table())
+            .collect::<Vec<_>>(),
+    );
 
     if let Some(Table(t)) = config.get(&target) {
         env.extend(t.clone());
@@ -96,8 +106,8 @@ pub fn load_env(root_dir: &Path, file_path: &Path, options: &Vec<(String, String
 }
 
 pub fn update_env(vars: &TomlTable) -> Result<()> {
-    if vars.is_empty() { 
-        return Ok(()); 
+    if vars.is_empty() {
+        return Ok(());
     }
 
     let content = fs::read_to_string(DATA_FILE).unwrap_or("".to_string());
@@ -136,7 +146,8 @@ mod tests {
 
     #[test]
     fn test_find_environments() {
-        let config = toml::from_str(r#"
+        let config = toml::from_str(
+            r#"
         global = "foo"
 
         [foo]
@@ -147,11 +158,12 @@ mod tests {
         [_default]
         fallback = "self"
 
-        "#).unwrap();
+        "#,
+        )
+        .unwrap();
 
         let envs = find_environments(&config).unwrap();
 
         assert_eq!(envs, vec!["bar", "foo"]);
     }
 }
-

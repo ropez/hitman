@@ -1,32 +1,21 @@
-use eyre::{Result, bail};
-use toml::Table;
-use std::fs::read_to_string;
-use std::path::{Path, PathBuf};
-use std::str;
+use eyre::{bail, Result};
+use inquire::{list_option::ListOption, Select};
+use log::error;
+use request::make_request;
 use std::env::current_dir;
-use inquire::{Select, list_option::ListOption};
+use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
-use httparse::Status::*;
-use minreq::{Method, Request, Response};
-use serde_json::Value;
-use log::{log_enabled, info, Level, error};
 
 mod cli;
-
-#[macro_use]
-mod util;
-use util::truncate;
-
-mod logging;
-
 mod env;
-use env::{select_env, find_root_dir, load_env, update_env};
+mod logging;
+mod request;
+mod util;
+use env::{find_root_dir, load_env, select_env};
 
 mod extract;
-use extract::extract_variables;
 
 mod substitute;
-use substitute::substitute;
 
 mod prompt;
 use prompt::set_interactive_mode;
@@ -56,11 +45,11 @@ fn main() -> Result<()> {
     } else {
         loop {
             let files = find_available_requests(&cwd)?;
-            let options: Vec<ListOption<String>> = files.iter()
+            let options: Vec<ListOption<String>> = files
+                .iter()
                 .enumerate()
-                .map(|(i, p)| 
-                    ListOption::new(i, p.display().to_string())
-                ).collect::<Vec<_>>();
+                .map(|(i, p)| ListOption::new(i, p.display().to_string()))
+                .collect::<Vec<_>>();
 
             eprintln!();
             let selected = Select::new("Select request", options)
@@ -97,95 +86,18 @@ fn main() -> Result<()> {
                 result
             }
         }
-        _ => result
+        _ => result,
     }
 }
 
 fn is_user_cancelation(err: &eyre::Report) -> bool {
-    matches!(err.downcast_ref(), Some(inquire::InquireError::OperationCanceled)) ||
-    matches!(err.downcast_ref(), Some(inquire::InquireError::OperationInterrupted))
-}
-
-fn make_request(file_path: &Path, env: &Table) -> Result<()> {
-    let buf = substitute(&read_to_string(file_path)?, &env)?;
-
-    print_request(&buf);
-
-    let mut headers = [httparse::EMPTY_HEADER; 64];
-    let mut req = httparse::Request::new(&mut headers);
-
-    // FIXME: Should request directly instead of parsing and spoon-feeding minreq?
-    let Complete(offset) = req.parse(&buf.as_bytes())? else {
-        panic!("Incomplete input")
-    };
-
-    let path = req.path.expect("Path should be valid");
-    let method = req.method.expect("Method should be valid");
-
-    let body = &buf[offset..];
-
-    let mut request = Request::new(to_method(method), path.to_string())
-        .with_body(body);
-
-    for header in req.headers {
-        let value = str::from_utf8(header.value)?;
-
-        request = request.with_header(String::from(header.name), value);
-    }
-
-    let t = std::time::Instant::now();
-    let response = request.send()?;
-
-    let elapsed = t.elapsed();
-
-    print_response(&response)?;
-    info!("# Request completed in {:.2?}", elapsed);
-
-    if let Ok(json) = response.json::<Value>() {
-        let vars = extract_variables(&json, &env)?;
-        update_env(&vars)?;
-    }
-
-    Ok(())
-}
-
-fn to_method(input: &str) -> Method {
-    Method::Custom(input.to_uppercase())
-}
-
-fn print_request(buf: &str) {
-    if log_enabled!(Level::Info) {
-        for line in buf.lines() {
-            info!("> {}", truncate(line));
-        }
-
-        info!("");
-    }
-}
-
-fn print_response(res: &Response) -> Result<()> {
-    if log_enabled!(Level::Info) {
-        info!("< HTTP/1.1 {} {}", res.status_code, res.reason_phrase);
-
-        let mut head = String::new();
-        for (name, value) in &res.headers {
-            head.push_str(&format!("{}: {}\n", name, value));
-        }
-
-        for line in head.lines() {
-            info!("< {}", truncate(line));
-        }
-
-        info!("");
-    }
-
-    // FIXME Check if content type is JSON
-
-    if let Ok(json) = res.json::<Value>() {
-        println!("{}", serde_json::to_string_pretty(&json)?);
-    }
-
-    Ok(())
+    matches!(
+        err.downcast_ref(),
+        Some(inquire::InquireError::OperationCanceled)
+    ) || matches!(
+        err.downcast_ref(),
+        Some(inquire::InquireError::OperationInterrupted)
+    )
 }
 
 fn find_available_requests(cwd: &Path) -> Result<Vec<PathBuf>, eyre::Error> {
@@ -193,7 +105,10 @@ fn find_available_requests(cwd: &Path) -> Result<Vec<PathBuf>, eyre::Error> {
         .into_iter()
         .filter_map(|e| e.ok())
         .filter(|e| {
-            e.file_name().to_str().map(|s| s.ends_with(".http")).unwrap_or(false)
+            e.file_name()
+                .to_str()
+                .map(|s| s.ends_with(".http"))
+                .unwrap_or(false)
         })
         .map(|p| {
             // Convert to relative path, based on depth
@@ -209,4 +124,3 @@ fn find_available_requests(cwd: &Path) -> Result<Vec<PathBuf>, eyre::Error> {
 
     Ok(files)
 }
-
