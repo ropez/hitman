@@ -123,7 +123,7 @@ fn select_replacement(key: &str, values: &Vec<Value>) -> Result<String> {
 fn prompt_user(key: &str, fallback: Option<&str>) -> Result<String> {
     let fb = fallback.unwrap_or("");
 
-    if key.ends_with("Date") {
+    if key.ends_with("_date") || key.ends_with("Date") {
         return prompt_for_date(key);
     }
 
