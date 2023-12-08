@@ -64,6 +64,7 @@ fn main() -> Result<()> {
 
             eprintln!();
             let selected = Select::new("Select request", options)
+                .with_filter(&|filter, _, value, _| prompt::fuzzy_match(filter, value))
                 .with_page_size(15)
                 .prompt()?;
 
@@ -89,7 +90,6 @@ fn main() -> Result<()> {
 
     // FIXME Must be a way to make this nicer
     match &result {
-        Ok(()) => result,
         Err(e) => {
             if is_user_cancelation(&e) {
                 Ok(())
@@ -97,6 +97,7 @@ fn main() -> Result<()> {
                 result
             }
         }
+        _ => result
     }
 }
 
@@ -160,7 +161,7 @@ fn print_request(buf: &str) {
 
 fn print_response(res: &Response) -> Result<()> {
     if log_enabled!(Level::Info) {
-        info!("HTTP/1.1 {} {}", res.status_code, res.reason_phrase);
+        info!("< HTTP/1.1 {} {}", res.status_code, res.reason_phrase);
 
         let mut head = String::new();
         for (name, value) in &res.headers {
