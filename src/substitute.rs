@@ -1,9 +1,9 @@
-use std::str;
-use eyre::{Result, bail};
-use toml::{Table, Value};
+use crate::prompt::{fuzzy_match, is_interactive_mode};
 use derive_more::{Display, Error};
-use inquire::{Select, DateSelect, Text, list_option::ListOption};
-use crate::prompt::{is_interactive_mode, fuzzy_match};
+use eyre::{bail, Result};
+use inquire::{list_option::ListOption, DateSelect, Select, Text};
+use std::str;
+use toml::{Table, Value};
 
 #[derive(Display, Error, Debug, Clone)]
 pub enum SubstituteError {
@@ -30,7 +30,7 @@ pub fn substitute(input: &str, env: &Table) -> Result<String> {
                     }
                     output.push_str(slice);
                     break;
-                },
+                }
                 Some(pos) => {
                     output.push_str(&slice[..pos]);
                     slice = &slice[pos..];
@@ -39,7 +39,7 @@ pub fn substitute(input: &str, env: &Table) -> Result<String> {
                         bail!(SubstituteError::SyntaxError);
                     };
 
-                    let rep = find_replacement(&slice[2 .. end - 2], env)?;
+                    let rep = find_replacement(&slice[2..end - 2], env)?;
                     output.push_str(&rep);
 
                     slice = &slice[end..];
@@ -80,7 +80,7 @@ fn find_replacement(placeholder: &str, env: &Table) -> Result<String> {
                     .map(|f| f.to_string())
                     .ok_or(SubstituteError::ReplacementNotFound.into())
             }
-        },
+        }
     }
 }
 
@@ -89,25 +89,21 @@ fn select_replacement(key: &str, values: &Vec<Value>) -> Result<String> {
         .clone()
         .into_iter()
         .enumerate()
-        .map(|(i, v)| 
+        .map(|(i, v)| {
             ListOption::new(
                 i,
                 match v {
-                    Value::Table(t) => {
-                        match t.get("name") {
-                            Some(value) => value.to_string(),
-                            None => t.to_string(),
-                        }
+                    Value::Table(t) => match t.get("name") {
+                        Some(value) => value.to_string(),
+                        None => t.to_string(),
                     },
                     other => other.to_string(),
-                }
+                },
             )
-        )
+        })
         .collect();
 
-    let selected = Select::new(
-        &format!("Select value for {}", key),
-        list_options.clone())
+    let selected = Select::new(&format!("Select value for {}", key), list_options.clone())
         .with_filter(&|filter, _, value, _| fuzzy_match(filter, value))
         .with_page_size(15)
         .prompt()?;
@@ -139,9 +135,7 @@ fn prompt_user(key: &str, fallback: Option<&str>) -> Result<String> {
 
 fn prompt_for_date(key: &str) -> Result<Option<String>> {
     let msg = format!("Select a date for {}", key);
-    let formatter = |date: chrono::NaiveDate| {
-        date.format("%Y-%m-%d").to_string()
-    };
+    let formatter = |date: chrono::NaiveDate| date.format("%Y-%m-%d").to_string();
 
     let res = DateSelect::new(&msg)
         .with_week_start(chrono::Weekday::Mon)
@@ -261,4 +255,3 @@ mod tests {
         assert!(res.is_err())
     }
 }
-

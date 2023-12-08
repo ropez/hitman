@@ -1,25 +1,8 @@
-use std::io::{
-    self,
-    Write,
-    IsTerminal,
-};
 use log::{
-    Level, 
-    LevelFilter,
-    Log, 
-    Metadata, 
-    Record, 
-    SetLoggerError,
-    set_boxed_logger, 
-    set_max_level, 
+    set_boxed_logger, set_max_level, Level, LevelFilter, Log, Metadata, Record, SetLoggerError,
 };
-use termcolor::{
-    Color,
-    ColorChoice,
-    ColorSpec,
-    StandardStream,
-    WriteColor,
-};
+use std::io::{self, IsTerminal, Write};
+use termcolor::{Color, ColorChoice, ColorSpec, StandardStream, WriteColor};
 
 struct Logger {
     level: Level,
@@ -36,17 +19,17 @@ impl Log for Logger {
             let mut stream: StandardStream = StandardStream::stderr(self.color);
             let msg = format!("{}", record.args());
             if msg.starts_with("<") {
-                stream.set_color(
-                    ColorSpec::new().set_fg(Some(Color::Cyan))
-                ).ok();
+                stream
+                    .set_color(ColorSpec::new().set_fg(Some(Color::Cyan)))
+                    .ok();
             } else if msg.starts_with(">") {
-                stream.set_color(
-                    ColorSpec::new().set_fg(Some(Color::Blue))
-                ).ok();
+                stream
+                    .set_color(ColorSpec::new().set_fg(Some(Color::Blue)))
+                    .ok();
             } else if msg.starts_with("#") {
-                stream.set_color(
-                    ColorSpec::new().set_fg(Some(Color::Yellow))
-                ).ok();
+                stream
+                    .set_color(ColorSpec::new().set_fg(Some(Color::Yellow)))
+                    .ok();
             }
             writeln!(&mut stream, "{}", record.args()).unwrap_or_else(|_| {
                 eprintln!("{}", record.args());
@@ -79,4 +62,3 @@ pub fn init(verbose: bool, quiet: bool) -> Result<(), SetLoggerError> {
 
     Ok(())
 }
-
