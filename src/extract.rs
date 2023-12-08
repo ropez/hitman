@@ -25,7 +25,7 @@ pub fn extract_variables(data: &JsonValue, scope: &Table) -> Result<Table> {
                         }
                     },
                     Value::Table(conf) => {
-                        let items_selector = make_selector(&get_string(&conf, "list")?)?;
+                        let items_selector = make_selector(&get_string(&conf, "_")?)?;
                         let value_selectors = make_item_selectors(&conf)?;
 
                         // jsonpath returns an iterator that contains one element,
@@ -68,7 +68,7 @@ pub fn extract_variables(data: &JsonValue, scope: &Table) -> Result<Table> {
 fn make_item_selectors(conf: &Table) -> Result<Vec<(String, Selector)>> {
     conf.iter()
         .filter_map(|(k, v)| {
-            if k == "list" { 
+            if k == "_" { 
                 None 
             } else { 
                 if let Value::String(s) = v {
@@ -122,7 +122,7 @@ mod tests {
         url = "example.com"
 
         [_extract]
-        ToolId = { list = "$.Tools", value = "$.ToolId", name = "$.Name" }
+        ToolId = { _ = "$.Tools", value = "$.ToolId", name = "$.Name" }
         "#).unwrap();
 
         let data = serde_json::from_str(r#"{ 
