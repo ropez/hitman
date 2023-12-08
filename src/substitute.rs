@@ -3,7 +3,7 @@ use eyre::{Result, bail};
 use toml::{Table, Value};
 use derive_more::{Display, Error};
 use inquire::{Select, DateSelect, Text, list_option::ListOption};
-use crate::prompt::is_interactive_mode;
+use crate::prompt::{is_interactive_mode, fuzzy_match};
 
 #[derive(Display, Error, Debug, Clone)]
 pub enum SubstituteError {
@@ -108,6 +108,7 @@ fn select_replacement(key: &str, values: &Vec<Value>) -> Result<String> {
     let selected = Select::new(
         &format!("Select value for {}", key),
         list_options.clone())
+        .with_filter(&|filter, _, value, _| fuzzy_match(filter, value))
         .with_page_size(15)
         .prompt()?;
 

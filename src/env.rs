@@ -6,6 +6,8 @@ use log::warn;
 use toml::{Table as TomlTable, Value};
 use inquire::Select;
 
+use crate::prompt::fuzzy_match;
+
 const CONFIG_FILE: &str = "hitman.toml";
 const LOCAL_CONFIG_FILE: &str = "hitman.local.toml";
 const TARGET_FILE: &str = ".hitman-target";
@@ -17,6 +19,7 @@ pub fn select_env(root_dir: &Path) -> Result<()> {
 
     let selected = Select::new("Select target", items.clone())
         .with_page_size(15)
+        .with_filter(&|filter, _, value, _| fuzzy_match(filter, value))
         .prompt()?;
 
     fs::write(root_dir.join(TARGET_FILE), &selected)?;
