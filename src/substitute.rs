@@ -124,7 +124,9 @@ fn prompt_user(key: &str, fallback: Option<&str>) -> Result<String> {
     let fb = fallback.unwrap_or("");
 
     if key.ends_with("_date") || key.ends_with("Date") {
-        return prompt_for_date(key);
+        if let Some(date) = prompt_for_date(key)? {
+            return Ok(date);
+        }
     }
 
     let input = Text::new(&format!("Enter value for {}", key))
@@ -134,13 +136,13 @@ fn prompt_user(key: &str, fallback: Option<&str>) -> Result<String> {
     Ok(input)
 }
 
-fn prompt_for_date(key: &str) -> Result<String> {
+fn prompt_for_date(key: &str) -> Result<Option<String>> {
     let msg = format!("Select a date for {}", key);
-    let date = DateSelect::new(&msg)
+    let res = DateSelect::new(&msg)
         .with_week_start(chrono::Weekday::Mon)
-        .prompt()?;
+        .prompt_skippable()?;
 
-    Ok(date.format("%Y-%m-%d").to_string())
+    Ok(res.map(|date| date.format("%Y-%m-%d").to_string()))
 }
 
 #[cfg(test)]
