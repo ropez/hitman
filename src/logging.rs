@@ -1,7 +1,10 @@
 use log::{
     set_boxed_logger, set_max_level, Level, LevelFilter, Log, Metadata, Record, SetLoggerError,
 };
-use std::io::{self, IsTerminal, Write};
+use std::{
+    io::{self, IsTerminal, Write},
+    ops::{Deref, DerefMut},
+};
 use termcolor::{Color, ColorChoice, ColorSpec, StandardStream, WriteColor};
 
 struct Logger {
@@ -9,6 +12,8 @@ struct Logger {
     color: ColorChoice,
 }
 
+/// Applies colors based on line prefices such as <, > or #,
+/// while level doesn't affect the color.
 impl Log for Logger {
     fn enabled(&self, metadata: &Metadata) -> bool {
         metadata.level() <= self.level
@@ -16,7 +21,7 @@ impl Log for Logger {
 
     fn log(&self, record: &Record) {
         if self.enabled(record.metadata()) {
-            let mut stream: StandardStream = StandardStream::stderr(self.color);
+            let mut stream = ScopedColorStream::new(self.color);
             let msg = format!("{}", record.args());
             if msg.starts_with("<") {
                 stream
@@ -34,7 +39,6 @@ impl Log for Logger {
             writeln!(&mut stream, "{}", record.args()).unwrap_or_else(|_| {
                 eprintln!("{}", record.args());
             });
-            stream.reset().ok();
         }
     }
 
@@ -62,3 +66,37 @@ pub fn init(verbose: bool, quiet: bool) -> Result<(), SetLoggerError> {
 
     Ok(())
 }
+
+/// Wrapper that automatically resets the terminal color
+struct ScopedColorStream {
+    stream: StandardStream,
+}
+
+impl ScopedColorStream {
+    fn new(color: ColorChoice) -> Self {
+        Self {
+            stream: StandardStream::stderr(color),
+        }
+    }
+}
+
+impl Drop for ScopedColorStream {
+    fn drop(&mut self) {
+        self.stream.reset().ok();
+    }
+}
+
+impl Deref for ScopedColorStream {
+    type Target = StandardStream;
+
+    fn deref(&self) -> &Self::Target {
+        &self.stream
+    }
+}
+
+impl DerefMut for ScopedColorStream {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.stream
+    }
+}
+
