@@ -15,9 +15,9 @@ pub fn extract_variables(data: &JsonValue, scope: &Table) -> Result<Table> {
             for (key, value) in table {
                 match value {
                     Value::String(jsonpath) => {
-                        let selector = make_selector(&jsonpath)?;
+                        let selector = make_selector(jsonpath)?;
 
-                        if let Some(JsonValue::String(val)) = selector.find(&data).next() {
+                        if let Some(JsonValue::String(val)) = selector.find(data).next() {
                             let msg = format!("# Got '{}' = '{}'", key, val);
                             info!("{}", truncate(&msg));
 
@@ -25,19 +25,19 @@ pub fn extract_variables(data: &JsonValue, scope: &Table) -> Result<Table> {
                         }
                     }
                     Value::Table(conf) => {
-                        let items_selector = make_selector(&get_string(&conf, "_")?)?;
-                        let value_selectors = make_item_selectors(&conf)?;
+                        let items_selector = make_selector(&get_string(conf, "_")?)?;
+                        let value_selectors = make_item_selectors(conf)?;
 
                         // jsonpath returns an iterator that contains one element,
                         // which is the JSON array.
 
-                        if let Some(JsonValue::Array(items)) = items_selector.find(&data).next() {
+                        if let Some(JsonValue::Array(items)) = items_selector.find(data).next() {
                             let mut toml_items: Vec<Value> = Vec::new();
 
                             for item_json in items {
                                 let mut toml_item = Table::new();
                                 for (name, selector) in value_selectors.iter() {
-                                    if let Some(v) = selector.find(&item_json).next() {
+                                    if let Some(v) = selector.find(item_json).next() {
                                         toml_item.insert(name.clone(), Value::try_from(v)?);
                                     }
                                 }
@@ -70,12 +70,10 @@ fn make_item_selectors(conf: &Table) -> Result<Vec<(String, Selector)>> {
         .filter_map(|(k, v)| {
             if k == "_" {
                 None
+            } else if let Value::String(s) = v {
+                Some(make_selector(s).map(|r| (k.to_string(), r)))
             } else {
-                if let Value::String(s) = v {
-                    Some(make_selector(s).map(|r| (k.to_string(), r)))
-                } else {
-                    None
-                }
+                None
             }
         })
         .collect::<Result<Vec<_>>>()

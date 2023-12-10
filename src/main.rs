@@ -84,7 +84,7 @@ fn main() -> Result<()> {
     // FIXME Must be a way to make this nicer
     match &result {
         Err(e) => {
-            if is_user_cancelation(&e) {
+            if is_user_cancelation(e) {
                 Ok(())
             } else {
                 result

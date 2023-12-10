@@ -23,15 +23,15 @@ impl Log for Logger {
         if self.enabled(record.metadata()) {
             let mut stream = ScopedColorStream::new(self.color);
             let msg = format!("{}", record.args());
-            if msg.starts_with("<") {
+            if msg.starts_with('<') {
                 stream
                     .set_color(ColorSpec::new().set_fg(Some(Color::Cyan)))
                     .ok();
-            } else if msg.starts_with(">") {
+            } else if msg.starts_with('>') {
                 stream
                     .set_color(ColorSpec::new().set_fg(Some(Color::Blue)))
                     .ok();
-            } else if msg.starts_with("#") {
+            } else if msg.starts_with('#') {
                 stream
                     .set_color(ColorSpec::new().set_fg(Some(Color::Yellow)))
                     .ok();
