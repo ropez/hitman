@@ -25,6 +25,8 @@ fn main() -> Result<()> {
 
     logging::init(args.verbose, args.quiet)?;
 
+    set_interactive_mode(!args.non_interactive);
+
     let Some(root_dir) = find_root_dir()? else {
         bail!("No hitman.toml found");
     };
@@ -34,8 +36,6 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    set_interactive_mode(true);
-
     let cwd = current_dir()?;
 
     let result = if let Some(file_path) = args.name {
@@ -43,6 +43,10 @@ fn main() -> Result<()> {
         let env = load_env(&root_dir, &file_path, &args.options)?;
         make_request(&file_path, &env)
     } else {
+        if args.non_interactive {
+            bail!("No request file specified");
+        }
+
         loop {
             let files = find_available_requests(&cwd)?;
             let options: Vec<ListOption<String>> = files

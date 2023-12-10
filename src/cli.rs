@@ -29,6 +29,10 @@ pub struct Args {
     /// Show no output except the returned data
     #[arg(short, long)]
     pub quiet: bool,
+
+    /// Do not ask questions
+    #[arg(short, long)]
+    pub non_interactive: bool,
 }
 
 /// Parse a single key-value pair
