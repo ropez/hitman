@@ -245,6 +245,7 @@ mod tests {
     fn fails_for_unmatched_open() {
         let env = create_env();
         let res = substitute("foo {{url\n", &env);
+
         assert!(res.is_err())
     }
 
@@ -252,6 +253,7 @@ mod tests {
     fn fails_for_unmatched_close() {
         let env = create_env();
         let res = substitute("foo url}} bar\n", &env);
+
         assert!(res.is_err())
     }
 }
