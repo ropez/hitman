@@ -1,17 +1,17 @@
-use std::fs::read_to_string;
-use std::path::Path;
 use eyre::Result;
-use toml::Table;
-use std::str;
 use httparse::Status::*;
+use log::{info, log_enabled, warn, Level};
 use minreq::{Method, Request, Response};
 use serde_json::Value;
-use log::{log_enabled, info, warn, Level};
+use std::fs::read_to_string;
+use std::path::Path;
+use std::str;
+use toml::Table;
 
-use crate::util::truncate;
+use crate::env::update_env;
 use crate::extract::extract_variables;
 use crate::substitute::substitute;
-use crate::env::update_env;
+use crate::util::truncate;
 
 pub fn make_request(file_path: &Path, env: &Table) -> Result<()> {
     let buf = substitute(&read_to_string(file_path)?, &env)?;
@@ -93,4 +93,3 @@ fn print_response(res: &Response) -> Result<()> {
 
     Ok(())
 }
-
