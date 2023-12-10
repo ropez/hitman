@@ -99,4 +99,3 @@ impl DerefMut for ScopedColorStream {
         &mut self.stream
     }
 }
-
