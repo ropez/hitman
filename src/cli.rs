@@ -45,7 +45,5 @@ fn parse_key_val(s: &str) -> Result<(String, String)> {
 }
 
 pub fn parse_args() -> Args {
-    let args = Args::parse();
-
-    args
+    Args::parse()
 }

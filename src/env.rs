@@ -49,12 +49,12 @@ pub fn find_root_dir() -> Result<Option<PathBuf>> {
 fn find_environments(config: &TomlTable) -> Result<Vec<String>> {
     let keys: Vec<String> = config
         .keys()
-        .filter(|k| !k.starts_with("_"))
+        .filter(|k| !k.starts_with('_'))
         .filter(|k| config.get(*k).expect("key must exist").is_table())
         .map(|k| k.to_string())
         .collect();
 
-    return Ok(keys);
+    Ok(keys)
 }
 
 pub fn load_env(
@@ -70,7 +70,7 @@ pub fn load_env(
 
     let mut env = TomlTable::new();
 
-    let config = read_and_merge_config(&root_dir)?;
+    let config = read_and_merge_config(root_dir)?;
 
     // Global defaults
     env.extend(
@@ -87,17 +87,16 @@ pub fn load_env(
         bail!("`{}` not found in config", target);
     }
 
-    match read_toml(&file_path.with_extension("http.toml")).ok() {
-        Some(content) => env.extend(content),
-        None => (),
+    if let Ok(content) = read_toml(&file_path.with_extension("http.toml")) {
+        env.extend(content)
     }
 
     // FIXME state per environment
-    match read_toml(&root_dir.join(DATA_FILE)).ok() {
-        Some(content) => env.extend(content),
-        None => (),
+    if let Ok(content) = read_toml(&root_dir.join(DATA_FILE)) {
+        env.extend(content)
     }
 
+    // Extra values passed on the command line
     for (k, v) in options {
         env.insert(k.clone(), Value::String(v.clone()));
     }
@@ -105,14 +104,14 @@ pub fn load_env(
     Ok(env)
 }
 
-pub fn update_env(vars: &TomlTable) -> Result<()> {
+pub fn update_data(vars: &TomlTable) -> Result<()> {
     if vars.is_empty() {
         return Ok(());
     }
 
     let content = fs::read_to_string(DATA_FILE).unwrap_or("".to_string());
 
-    let mut state = toml::from_str::<TomlTable>(&content).unwrap_or(TomlTable::new());
+    let mut state = toml::from_str::<TomlTable>(&content).unwrap_or_default();
 
     state.extend(vars.clone());
     fs::write(DATA_FILE, toml::to_string_pretty(&state)?)?;
@@ -125,7 +124,7 @@ fn read_and_merge_config(root_dir: &Path) -> Result<TomlTable> {
 
     config.extend(read_toml(&root_dir.join(CONFIG_FILE))?);
 
-    if let Some(local) = read_toml(&root_dir.join(LOCAL_CONFIG_FILE)).ok() {
+    if let Ok(local) = read_toml(&root_dir.join(LOCAL_CONFIG_FILE)) {
         config.extend(local);
     }
 

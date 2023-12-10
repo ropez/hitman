@@ -26,8 +26,8 @@ pub fn fuzzy_match(filter: &str, value: &str) -> bool {
     let mut value_chars = value_lower.chars();
     let mut filter_chars = filter_lower.chars();
 
-    'outer: while let Some(filter_char) = filter_chars.next() {
-        while let Some(value_char) = value_chars.next() {
+    'outer: for filter_char in filter_chars.by_ref() {
+        for value_char in value_chars.by_ref() {
             if value_char == filter_char {
                 continue 'outer;
             }
@@ -35,7 +35,7 @@ pub fn fuzzy_match(filter: &str, value: &str) -> bool {
         return false;
     }
 
-    return true;
+    true
 }
 
 #[cfg(test)]

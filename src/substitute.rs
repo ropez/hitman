@@ -25,7 +25,7 @@ pub fn substitute(input: &str, env: &Table) -> Result<String> {
         loop {
             match slice.find("{{") {
                 None => {
-                    if slice.find("}}").is_some() {
+                    if slice.contains("}}") {
                         bail!(SubstituteError::SyntaxError)
                     }
                     output.push_str(slice);
@@ -47,14 +47,14 @@ pub fn substitute(input: &str, env: &Table) -> Result<String> {
             }
         }
 
-        output.push_str("\n");
+        output.push('\n');
     }
 
     Ok(output)
 }
 
 fn find_replacement(placeholder: &str, env: &Table) -> Result<String> {
-    let mut parts = placeholder.split("|");
+    let mut parts = placeholder.split('|');
 
     let key = parts.next().unwrap_or("").trim();
     match env.get(key) {
@@ -64,7 +64,7 @@ fn find_replacement(placeholder: &str, env: &Table) -> Result<String> {
         Some(Value::Boolean(v)) => Ok(v.to_string()),
         Some(Value::Array(arr)) => {
             if is_interactive_mode() {
-                Ok(select_replacement(key, &arr)?)
+                Ok(select_replacement(key, arr)?)
             } else {
                 bail!(SubstituteError::ReplacementNotFound)
             }
@@ -84,10 +84,9 @@ fn find_replacement(placeholder: &str, env: &Table) -> Result<String> {
     }
 }
 
-fn select_replacement(key: &str, values: &Vec<Value>) -> Result<String> {
+fn select_replacement(key: &str, values: &[Value]) -> Result<String> {
     let list_options: Vec<ListOption<String>> = values
-        .clone()
-        .into_iter()
+        .iter()
         .enumerate()
         .map(|(i, v)| {
             ListOption::new(

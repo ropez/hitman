@@ -8,13 +8,13 @@ use std::path::Path;
 use std::str;
 use toml::Table;
 
-use crate::env::update_env;
+use crate::env::update_data;
 use crate::extract::extract_variables;
 use crate::substitute::substitute;
 use crate::util::truncate;
 
 pub fn make_request(file_path: &Path, env: &Table) -> Result<()> {
-    let buf = substitute(&read_to_string(file_path)?, &env)?;
+    let buf = substitute(&read_to_string(file_path)?, env)?;
 
     print_request(&buf);
 
@@ -22,7 +22,7 @@ pub fn make_request(file_path: &Path, env: &Table) -> Result<()> {
     let mut req = httparse::Request::new(&mut headers);
 
     // FIXME: Should request directly instead of parsing and spoon-feeding minreq?
-    let Complete(offset) = req.parse(&buf.as_bytes())? else {
+    let Complete(offset) = req.parse(buf.as_bytes())? else {
         panic!("Incomplete input")
     };
 
@@ -48,8 +48,8 @@ pub fn make_request(file_path: &Path, env: &Table) -> Result<()> {
     warn!("# Request completed in {:.2?}", elapsed);
 
     if let Ok(json) = response.json::<Value>() {
-        let vars = extract_variables(&json, &env)?;
-        update_env(&vars)?;
+        let vars = extract_variables(&json, env)?;
+        update_data(&vars)?;
     }
 
     Ok(())
