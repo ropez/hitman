@@ -1,4 +1,4 @@
-use eyre::Result;
+use eyre::{ContextCompat, Result};
 use httparse::Status::*;
 use log::{info, log_enabled, warn, Level};
 use minreq::{Method, Request, Response};
@@ -23,8 +23,8 @@ pub fn make_request(file_path: &Path, env: &Table) -> Result<()> {
 
     let parse_result = req.parse(buf.as_bytes())?;
 
-    let url = req.path.expect("Path should be valid");
-    let method = req.method.expect("Method should be valid");
+    let url = req.path.context("Path should be valid")?;
+    let method = req.method.context("Method should be valid")?;
 
     let mut request = Request::new(to_method(method), url.to_string());
 
