@@ -21,19 +21,24 @@ pub fn make_request(file_path: &Path, env: &Table) -> Result<()> {
     let mut headers = [httparse::EMPTY_HEADER; 64];
     let mut req = httparse::Request::new(&mut headers);
 
-    // FIXME: Should request directly instead of parsing and spoon-feeding minreq?
-    let Complete(offset) = req.parse(buf.as_bytes())? else {
-        panic!("Incomplete input")
-    };
+    let parse_result = req.parse(buf.as_bytes())?;
 
     let url = req.path.expect("Path should be valid");
     let method = req.method.expect("Method should be valid");
 
-    let body = &buf[offset..];
+    let mut request = Request::new(to_method(method), url.to_string());
 
-    let mut request = Request::new(to_method(method), url.to_string()).with_body(body);
+    if let Complete(offset) = parse_result {
+        let body = &buf[offset..];
+        request = request.with_body(body);
+    }
 
     for header in req.headers {
+        // The parse_http crate is weird, it fills the array with empty headers
+        // if a partial request is parsed.
+        if header.name.is_empty() {
+            break;
+        }
         let value = str::from_utf8(header.value)?;
 
         request = request.with_header(String::from(header.name), value);
