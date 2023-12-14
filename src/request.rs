@@ -1,11 +1,16 @@
+use counter::Counter;
 use eyre::{ContextCompat, Result};
+use futures::future::join_all;
 use httparse::Status::*;
 use log::{info, log_enabled, warn, Level};
-use minreq::{Method, Request, Response};
+use reqwest::{Client, Method, Request, RequestBuilder, Response, Url};
 use serde_json::Value;
 use std::fs::read_to_string;
 use std::path::Path;
 use std::str;
+use std::str::FromStr;
+use std::time::Duration;
+use tokio::task::spawn;
 use toml::Table;
 
 use crate::env::update_data;
@@ -13,11 +18,73 @@ use crate::extract::extract_variables;
 use crate::substitute::substitute;
 use crate::util::truncate;
 
-pub fn make_request(file_path: &Path, env: &Table) -> Result<()> {
+pub async fn batch_requests(file_path: &Path, batch: i32, env: &Table) -> Result<()> {
+    let buf = substitute(&read_to_string(file_path)?, env)?;
+
+    warn!("# Sending {batch} parallel requests...");
+
+    let t = std::time::Instant::now();
+
+    // This is probably not a very performant way to do this,
+    // but it works for now.
+    let handles = (0..batch).map(|_| {
+        let buf = buf.clone();
+        spawn(async move {
+            match do_request(&buf).await {
+                Ok((res, elapsed)) => Some((res.status().as_u16(), elapsed)),
+                Err(_) => None,
+            }
+        })
+    });
+
+    let results: Vec<_> = join_all(handles)
+        .await
+        .into_iter()
+        .filter_map(|h| h.unwrap())
+        .collect();
+
+    let elapsed = t.elapsed();
+
+    let average = results.iter().map(|(_, d)| d).sum::<Duration>() / batch as u32;
+
+    let statuses: Counter<_> = results.iter().map(|(s, _)| s).collect();
+    let statuses = statuses
+        .iter()
+        .map(|(s, c)| format!("{}x{}", s, c))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    warn!("# Finished in {:.2?}", elapsed);
+    warn!("# {} of {} requests completed", results.len(), batch);
+    warn!("# Results: {}", statuses);
+    warn!("# Average: {:.2?}", average);
+    warn!("# Slowest: {:.2?}", Iterator::max(results.iter()).unwrap());
+    warn!("# Fastest: {:.2?}", Iterator::min(results.iter()).unwrap());
+
+    Ok(())
+}
+
+pub async fn make_request(file_path: &Path, env: &Table) -> Result<()> {
     let buf = substitute(&read_to_string(file_path)?, env)?;
 
     print_request(&buf);
 
+    let (response, elapsed) = do_request(&buf).await?;
+
+    print_response(&response)?;
+
+    if let Ok(json) = response.json::<Value>().await {
+        println!("{}", serde_json::to_string_pretty(&json)?);
+        let vars = extract_variables(&json, env)?;
+        update_data(&vars)?;
+    }
+
+    warn!("# Request completed in {:.2?}", elapsed);
+
+    Ok(())
+}
+
+async fn do_request(buf: &str) -> Result<(Response, Duration)> {
     let mut headers = [httparse::EMPTY_HEADER; 64];
     let mut req = httparse::Request::new(&mut headers);
 
@@ -26,11 +93,15 @@ pub fn make_request(file_path: &Path, env: &Table) -> Result<()> {
     let url = req.path.context("Path should be valid")?;
     let method = req.method.context("Method should be valid")?;
 
-    let mut request = Request::new(to_method(method), url.to_string());
+    let method = Method::from_str(method)?;
+    let url = Url::parse(url)?;
+    let client = Client::new();
+
+    let mut builder = RequestBuilder::from_parts(client, Request::new(method, url));
 
     if let Complete(offset) = parse_result {
         let body = &buf[offset..];
-        request = request.with_body(body);
+        builder = builder.body(body.to_owned());
     }
 
     for header in req.headers {
@@ -41,27 +112,15 @@ pub fn make_request(file_path: &Path, env: &Table) -> Result<()> {
         }
         let value = str::from_utf8(header.value)?;
 
-        request = request.with_header(String::from(header.name), value);
+        builder = builder.header(String::from(header.name), value);
     }
 
     let t = std::time::Instant::now();
-    let response = request.send()?;
+    let response = builder.send().await?;
 
     let elapsed = t.elapsed();
 
-    print_response(&response)?;
-    warn!("# Request completed in {:.2?}", elapsed);
-
-    if let Ok(json) = response.json::<Value>() {
-        let vars = extract_variables(&json, env)?;
-        update_data(&vars)?;
-    }
-
-    Ok(())
-}
-
-fn to_method(input: &str) -> Method {
-    Method::Custom(input.to_uppercase())
+    Ok((response, elapsed))
 }
 
 fn print_request(buf: &str) {
@@ -76,11 +135,16 @@ fn print_request(buf: &str) {
 
 fn print_response(res: &Response) -> Result<()> {
     if log_enabled!(Level::Info) {
-        info!("< HTTP/1.1 {} {}", res.status_code, res.reason_phrase);
+        let status = res.status();
+        info!(
+            "< HTTP/1.1 {} {}",
+            status.as_u16(),
+            status.canonical_reason().unwrap_or("")
+        );
 
         let mut head = String::new();
-        for (name, value) in &res.headers {
-            head.push_str(&format!("{}: {}\n", name, value));
+        for (name, value) in res.headers() {
+            head.push_str(&format!("{}: {}\n", name, value.to_str()?));
         }
 
         for line in head.lines() {
@@ -88,12 +152,6 @@ fn print_response(res: &Response) -> Result<()> {
         }
 
         info!("");
-    }
-
-    // FIXME Check if content type is JSON
-
-    if let Ok(json) = res.json::<Value>() {
-        println!("{}", serde_json::to_string_pretty(&json)?);
     }
 
     Ok(())

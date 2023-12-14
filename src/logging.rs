@@ -47,11 +47,12 @@ impl Log for Logger {
     }
 }
 
-pub fn init(verbose: bool, quiet: bool) -> Result<(), SetLoggerError> {
+pub fn init(verbose: bool, quiet: bool, batch: bool) -> Result<(), SetLoggerError> {
     let logger = Logger {
-        level: match (verbose, quiet) {
-            (true, false) => Level::Debug,
-            (false, true) => Level::Error,
+        level: match (verbose, quiet, batch) {
+            (_, true, _) => Level::Error,
+            (_, _, true) => Level::Warn,
+            (true, _, _) => Level::Debug,
             _ => Level::Info,
         },
         color: if io::stderr().is_terminal() {
