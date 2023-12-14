@@ -6,16 +6,19 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+chrono = "0.4.31"
+clap = { version = "4.4", features = ["derive"] }
+counter = "0.5"
 derive_more = "*"
+eyre = "0.6.9"
+futures = "0.3"
 httparse = "1.8"
-serde_json = "1.0"
+inquire = { version = "0.6.2", features = ["date"] }
 jsonpath = "0.1"
+log = { version = "0.4.20", features = ["std"] }
+reqwest = { version = "0.11", features = ["json"] }
+serde_json = "1.0"
+termcolor = "1.4.0"
+tokio = { version = "1", features = ["full", "rt"] }
 toml = "0.8"
 walkdir = "2"
-minreq = { version = "2", features = ["https", "json-using-serde"] }
-eyre = "0.6.9"
-clap = { version = "4.4", features = ["derive"] }
-log = { version = "0.4.20", features = ["std"] }
-termcolor = "1.4.0"
-inquire = { version = "0.6.2", features = ["date"] }
-chrono = "0.4.31"

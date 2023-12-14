@@ -19,7 +19,7 @@ pub struct Args {
     pub repeat: bool,
 
     /// Select a target from the config file
-    #[arg(short, long)]
+    #[arg(short, long, conflicts_with = "name", conflicts_with = "repeat")]
     pub select: bool,
 
     /// Show more output
@@ -31,8 +31,12 @@ pub struct Args {
     pub quiet: bool,
 
     /// Do not ask questions
-    #[arg(short, long)]
+    #[arg(short, long, requires = "name")]
     pub non_interactive: bool,
+
+    /// Number of parallel requests
+    #[arg(long, conflicts_with = "repeat", requires = "name")]
+    pub batch: Option<i32>,
 }
 
 /// Parse a single key-value pair

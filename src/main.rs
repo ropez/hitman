@@ -1,7 +1,7 @@
 use eyre::{bail, Result};
 use inquire::{list_option::ListOption, Select};
 use log::error;
-use request::make_request;
+use request::{batch_requests, make_request};
 use std::env::current_dir;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
@@ -20,10 +20,11 @@ mod substitute;
 mod prompt;
 use prompt::set_interactive_mode;
 
-fn main() -> Result<()> {
+#[tokio::main]
+async fn main() -> Result<()> {
     let args = cli::parse_args();
 
-    logging::init(args.verbose, args.quiet)?;
+    logging::init(args.verbose, args.quiet, args.batch.is_some())?;
 
     set_interactive_mode(!args.non_interactive);
 
@@ -41,12 +42,13 @@ fn main() -> Result<()> {
     let result = if let Some(file_path) = args.name {
         let file_path = cwd.join(file_path);
         let env = load_env(&root_dir, &file_path, &args.options)?;
-        make_request(&file_path, &env)
-    } else {
-        if args.non_interactive {
-            bail!("No request file specified");
-        }
 
+        if let Some(batch) = args.batch {
+            batch_requests(&file_path, batch, &env).await
+        } else {
+            make_request(&file_path, &env).await
+        }
+    } else {
         loop {
             let files = find_available_requests(&cwd)?;
             let options: Vec<ListOption<String>> = files
@@ -65,7 +67,7 @@ fn main() -> Result<()> {
 
             let env = load_env(&root_dir, file_path, &args.options)?;
 
-            let result = make_request(&cwd.join(file_path), &env);
+            let result = make_request(&cwd.join(file_path), &env).await;
             if !args.repeat {
                 break result;
             }
