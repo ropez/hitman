@@ -68,6 +68,20 @@ pub fn init(verbose: bool, quiet: bool, batch: bool) -> Result<(), SetLoggerErro
     Ok(())
 }
 
+pub fn clear_screen() {
+    if cfg!(windows) {
+        std::process::Command::new("cmd")
+            .args(&["/c", "cls"])
+            .spawn()
+            .expect("cls command failed to start")
+            .wait()
+            .expect("failed to wait");
+    } else {
+        // Untested!
+        print!("\x1B[2J");
+    }
+}
+
 /// Wrapper that automatically resets the terminal color
 struct ScopedColorStream {
     stream: StandardStream,
