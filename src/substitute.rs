@@ -1,19 +1,22 @@
 use crate::prompt::{fuzzy_match, is_interactive_mode};
-use derive_more::{Display, Error};
 use eyre::{bail, Result};
 use inquire::{list_option::ListOption, DateSelect, Select, Text};
 use std::str;
+use thiserror::Error;
 use toml::{Table, Value};
 
-#[derive(Display, Error, Debug, Clone)]
+#[derive(Error, Debug, Clone)]
 pub enum SubstituteError {
-    #[display(fmt = "Could not find replacement")]
-    ReplacementNotFound,
+    #[error("Replacement not found: {key}")]
+    ReplacementNotFound { key: String },
 
-    #[display(fmt = "Syntax error")]
+    #[error("Replacement not selected: {key}\nSuggestions:\n{suggestions}")]
+    ReplacementNotSelected { key: String, suggestions: String },
+
+    #[error("Syntax error")]
     SyntaxError,
 
-    #[display(fmt = "Type not supported")]
+    #[error("Type not supported")]
     TypeNotSupported,
 }
 
@@ -66,7 +69,19 @@ fn find_replacement(placeholder: &str, env: &Table) -> Result<String> {
             if is_interactive_mode() {
                 Ok(select_replacement(key, arr)?)
             } else {
-                bail!(SubstituteError::ReplacementNotFound)
+                let suggestions: Vec<String> = arr
+                    .iter()
+                    .take(10)
+                    .filter_map(|v| match (v.get("value"), v.get("name")) {
+                        (Some(v), Some(n)) => Some(format!("{key}={v} => {n}")),
+                        _ => None,
+                    })
+                    .collect();
+                let suggestions = suggestions.join("\n");
+                bail!(SubstituteError::ReplacementNotSelected {
+                    key: key.into(),
+                    suggestions
+                })
             }
         }
         Some(_) => bail!(SubstituteError::TypeNotSupported),
@@ -78,7 +93,7 @@ fn find_replacement(placeholder: &str, env: &Table) -> Result<String> {
             } else {
                 fallback
                     .map(|f| f.to_string())
-                    .ok_or(SubstituteError::ReplacementNotFound.into())
+                    .ok_or(SubstituteError::ReplacementNotFound { key: key.into() }.into())
             }
         }
     }
@@ -110,7 +125,7 @@ fn select_replacement(key: &str, values: &[Value]) -> Result<String> {
     match &values[selected.index] {
         Value::Table(t) => match t.get("value") {
             Some(value) => Ok(value.to_string()),
-            _ => bail!(SubstituteError::ReplacementNotFound),
+            _ => bail!(SubstituteError::ReplacementNotFound { key: key.into() }),
         },
         other => Ok(other.to_string()),
     }
