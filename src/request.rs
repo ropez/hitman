@@ -15,6 +15,7 @@ use toml::Table;
 
 use crate::env::update_data;
 use crate::extract::extract_variables;
+use crate::logging;
 use crate::substitute::substitute;
 use crate::util::truncate;
 
@@ -67,6 +68,7 @@ pub async fn batch_requests(file_path: &Path, batch: i32, env: &Table) -> Result
 pub async fn make_request(file_path: &Path, env: &Table) -> Result<()> {
     let buf = substitute(&read_to_string(file_path)?, env)?;
 
+    logging::clear_screen();
     print_request(&buf);
 
     let (response, elapsed) = do_request(&buf).await?;

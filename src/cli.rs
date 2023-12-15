@@ -37,6 +37,10 @@ pub struct Args {
     /// Number of parallel requests
     #[arg(long, conflicts_with = "repeat", requires = "name")]
     pub batch: Option<i32>,
+
+    /// Watch file for changes (implies non-interactove)
+    #[arg(short, long, requires = "name", conflicts_with = "batch")]
+    pub watch: bool,
 }
 
 /// Parse a single key-value pair
