@@ -122,13 +122,33 @@ pub fn update_data(vars: &TomlTable) -> Result<()> {
 fn read_and_merge_config(root_dir: &Path) -> Result<TomlTable> {
     let mut config = TomlTable::new();
 
-    config.extend(read_toml(&root_dir.join(CONFIG_FILE))?);
+    merge(&mut config, read_toml(&root_dir.join(CONFIG_FILE))?);
 
     if let Ok(local) = read_toml(&root_dir.join(LOCAL_CONFIG_FILE)) {
-        config.extend(local);
+        merge(&mut config, local);
     }
 
     Ok(config)
+}
+
+/// Merge Toml tables recursively, merging child tables into
+/// existing child tables.
+fn merge(config: &mut TomlTable, other: TomlTable) {
+    other.into_iter().for_each(move |(k, v)| {
+        match v {
+            Value::Table(t) => {
+                let cur = config.get_mut(&k);
+                if let Some(Value::Table(ref mut ext)) = cur {
+                    merge(ext, t);
+                } else {
+                    config.insert(k, Value::Table(t));
+                };
+            }
+            _ => {
+                config.insert(k, v);
+            }
+        };
+    });
 }
 
 fn read_toml(file_path: &Path) -> Result<TomlTable> {
