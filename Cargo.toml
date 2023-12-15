@@ -9,7 +9,7 @@ edition = "2021"
 chrono = "0.4.31"
 clap = { version = "4.4", features = ["derive"] }
 counter = "0.5"
-derive_more = "*"
+thiserror = "1.0"
 eyre = "0.6.9"
 futures = "0.3"
 httparse = "1.8"
