@@ -1,4 +1,3 @@
-use counter::Counter;
 use eyre::{ContextCompat, Result};
 use futures::future::join_all;
 use httparse::Status::*;
@@ -17,7 +16,7 @@ use crate::env::update_data;
 use crate::extract::extract_variables;
 use crate::logging;
 use crate::substitute::substitute;
-use crate::util::truncate;
+use crate::util::{truncate, IterExt};
 
 pub async fn batch_requests(file_path: &Path, batch: i32, env: &Table) -> Result<()> {
     let buf = substitute(&read_to_string(file_path)?, env)?;
@@ -48,7 +47,7 @@ pub async fn batch_requests(file_path: &Path, batch: i32, env: &Table) -> Result
 
     let average = results.iter().map(|(_, d)| d).sum::<Duration>() / batch as u32;
 
-    let statuses: Counter<_> = results.iter().map(|(s, _)| s).collect();
+    let statuses = results.iter().map(|(s, _)| s).counted();
     let statuses = statuses
         .iter()
         .map(|(s, c)| format!("{}x{}", s, c))
