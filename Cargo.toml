@@ -8,7 +8,6 @@ edition = "2021"
 [dependencies]
 chrono = "0.4.31"
 clap = { version = "4.4", features = ["derive"] }
-counter = "0.5"
 eyre = "0.6.9"
 futures = "0.3"
 httparse = "1.8"
