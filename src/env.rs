@@ -169,26 +169,74 @@ fn read_toml(file_path: &Path) -> Result<TomlTable> {
 mod tests {
     use super::*;
 
+    macro_rules! toml {
+        ($($tt:tt)*) => {
+            toml::from_str($($tt)*).unwrap()
+        }
+    }
+
     #[test]
     fn test_find_environments() {
-        let config = toml::from_str(
-            r#"
-        global = "foo"
+        let config = toml! {
+        r#"
+            global = "foo"
 
-        [foo]
-        value = "koko"
+            [foo]
+            value = "koko"
 
-        [bar]
+            [bar]
 
-        [_default]
-        fallback = "self"
-
-        "#,
-        )
-        .unwrap();
+            [_default]
+            fallback = "self"
+        "#
+        };
 
         let envs = find_environments(&config).unwrap();
 
         assert_eq!(envs, vec!["bar", "foo"]);
+    }
+
+    #[test]
+    fn merges_mested_tables() {
+        let shared = toml! {
+        r#"
+            global0 = "shared_global0"
+            global1 = "shared_global1"
+
+            [thing]
+            thing0 = "shared_thing0"
+            thing1 = "shared_thing1"
+        "#
+        };
+
+        let private = toml! {
+        r#"
+            global0 = "private_global0"
+            global2 = "private_global2"
+
+            [thing]
+            thing0 = "private_thing0"
+            thing2 = "private_thing2"
+        "#
+        };
+
+        let mut merged = TomlTable::new();
+        merge(&mut merged, shared);
+        merge(&mut merged, private);
+
+        let expected = toml! {
+        r#"
+            global0 = "private_global0"
+            global1 = "shared_global1"
+            global2 = "private_global2"
+
+            [thing]
+            thing0 = "private_thing0"
+            thing1 = "shared_thing1"
+            thing2 = "private_thing2"
+        "#
+        };
+
+        assert_eq!(merged, expected);
     }
 }
