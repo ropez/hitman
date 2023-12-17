@@ -58,16 +58,12 @@ async fn main() -> Result<()> {
             if args.watch {
                 let mut hotwatch = Hotwatch::new_with_custom_delay(Duration::from_millis(100))?;
                 hotwatch.watch(file_path.clone(), move |event: Event| {
-                    match event.kind {
-                        EventKind::Modify(ModifyKind::Any) => {
-                            let fut = make_request(&file_path, &env);
-                            match block_on(fut) {
-                                Err(e) => error!("{}", e),
-                                Ok(_) => {}
-                            }
-                            info!("# Watching for changes...");
+                    if let EventKind::Modify(ModifyKind::Any) = event.kind {
+                        let fut = make_request(&file_path, &env);
+                        if let Err(e) = block_on(fut) {
+                            error!("{}", e)
                         }
-                        _ => (),
+                        info!("# Watching for changes...");
                     }
                     Flow::Continue
                 })?;
