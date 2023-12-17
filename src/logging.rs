@@ -71,7 +71,7 @@ pub fn init(verbose: bool, quiet: bool, batch: bool) -> Result<(), SetLoggerErro
 pub fn clear_screen() {
     if cfg!(windows) {
         std::process::Command::new("cmd")
-            .args(&["/c", "cls"])
+            .args(["/c", "cls"])
             .spawn()
             .expect("cls command failed to start")
             .wait()
