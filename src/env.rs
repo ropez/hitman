@@ -109,12 +109,18 @@ pub fn update_data(vars: &TomlTable) -> Result<()> {
         return Ok(());
     }
 
-    let content = fs::read_to_string(DATA_FILE).unwrap_or("".to_string());
+    let root_dir = find_root_dir()?;
+    let Some(root_dir) = root_dir else {
+        bail!("Could not find project root");
+    };
+    let data_file = root_dir.join(DATA_FILE);
+
+    let content = fs::read_to_string(&data_file).unwrap_or("".to_string());
 
     let mut state = toml::from_str::<TomlTable>(&content).unwrap_or_default();
 
     state.extend(vars.clone());
-    fs::write(DATA_FILE, toml::to_string_pretty(&state)?)?;
+    fs::write(&data_file, toml::to_string_pretty(&state)?)?;
 
     Ok(())
 }
