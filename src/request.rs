@@ -1,4 +1,4 @@
-use eyre::{ContextCompat, Result};
+use eyre::{bail, ContextCompat, Result};
 use futures::future::join_all;
 use httparse::Status::*;
 use log::{info, log_enabled, warn, Level};
@@ -19,9 +19,13 @@ use crate::substitute::substitute;
 use crate::util::{truncate, IterExt};
 
 pub async fn batch_requests(file_path: &Path, batch: i32, env: &Table) -> Result<()> {
-    let buf = substitute(&read_to_string(file_path)?, env)?;
+    if batch < 1 {
+        bail!("Batch size must be at least 1");
+    }
 
     warn!("# Sending {batch} parallel requests...");
+
+    let buf = substitute(&read_to_string(file_path)?, env)?;
 
     let t = std::time::Instant::now();
 
@@ -46,7 +50,7 @@ pub async fn batch_requests(file_path: &Path, batch: i32, env: &Table) -> Result
 
     let elapsed = t.elapsed();
 
-    let average = results.iter().map(|(_, d)| d).sum::<Duration>() / batch as u32;
+    let average = results.iter().map(|(_, d)| d).sum::<Duration>() / results.len() as u32;
 
     let statuses = results.iter().map(|(s, _)| s).counted();
     let statuses = statuses
