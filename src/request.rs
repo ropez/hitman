@@ -9,7 +9,7 @@ use std::path::Path;
 use std::str;
 use std::str::FromStr;
 use std::time::Duration;
-use tokio::task::spawn;
+use tokio::spawn;
 use toml::Table;
 
 use crate::env::update_data;
@@ -25,8 +25,9 @@ pub async fn batch_requests(file_path: &Path, batch: i32, env: &Table) -> Result
 
     let t = std::time::Instant::now();
 
-    // This is probably not a very performant way to do this,
-    // but it works for now.
+    // Run each request in a separate tokio task.
+    // It might make it more efficient, if we let each task run a series
+    // of requests using a single connection.
     let handles = (0..batch).map(|_| {
         let buf = buf.clone();
         spawn(async move {
@@ -40,7 +41,7 @@ pub async fn batch_requests(file_path: &Path, batch: i32, env: &Table) -> Result
     let results: Vec<_> = join_all(handles)
         .await
         .into_iter()
-        .filter_map(|h| h.unwrap())
+        .filter_map(|h| h.ok().flatten())
         .collect();
 
     let elapsed = t.elapsed();
