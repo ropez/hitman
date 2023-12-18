@@ -143,10 +143,8 @@ async fn watch_mode(file_path: PathBuf, env: toml::Table) -> Result<()> {
     let (tx, mut rx) = mpsc::channel(1);
 
     let mut watcher = recommended_watcher(move |res| {
-        if let Ok(res) = res {
-            if let Err(err) = tx.blocking_send(res) {
-                error!("# {}", err)
-            }
+        if let Ok(event) = res {
+            tx.blocking_send(event).expect("send to channel");
         }
     })?;
 
