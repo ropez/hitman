@@ -1,7 +1,7 @@
 use eyre::{bail, Result};
 use inquire::{list_option::ListOption, Select};
 use log::{error, info};
-use notify::{recommended_watcher, Watcher};
+use notify::{recommended_watcher, EventKind, RecursiveMode, Watcher};
 use request::{batch_requests, make_request};
 use std::env::current_dir;
 use std::path::{Path, PathBuf};
@@ -114,7 +114,7 @@ fn is_user_cancelation(err: &eyre::Report) -> bool {
     )
 }
 
-fn find_available_requests(cwd: &Path) -> Result<Vec<PathBuf>, eyre::Error> {
+fn find_available_requests(cwd: &Path) -> Result<Vec<PathBuf>> {
     let files: Vec<_> = WalkDir::new(cwd)
         .into_iter()
         .filter_map(|e| e.ok())
@@ -148,12 +148,12 @@ async fn watch_mode(file_path: PathBuf, env: toml::Table) -> Result<()> {
         }
     })?;
 
-    watcher.watch(&file_path, notify::RecursiveMode::NonRecursive)?;
+    watcher.watch(&file_path, RecursiveMode::NonRecursive)?;
 
     loop {
         info!("# Watching for changes...");
         if let Some(event) = rx.recv().await {
-            if let notify::EventKind::Modify(_) = event.kind {
+            if let EventKind::Modify(_) = event.kind {
                 if let Err(err) = make_request(&file_path, &env).await {
                     error!("# {}", err)
                 }
