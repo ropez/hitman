@@ -1,16 +1,11 @@
 use eyre::{bail, Result};
-use futures::executor::block_on;
-use hotwatch::{
-    blocking::{Flow, Hotwatch},
-    Event, EventKind,
-};
 use inquire::{list_option::ListOption, Select};
 use log::{error, info};
-use notify::event::ModifyKind;
+use notify::{recommended_watcher, Watcher};
 use request::{batch_requests, make_request};
 use std::env::current_dir;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use tokio::sync::mpsc;
 use walkdir::WalkDir;
 
 mod cli;
@@ -56,21 +51,7 @@ async fn main() -> Result<()> {
             let res = make_request(&file_path, &env).await;
 
             if args.watch {
-                let mut hotwatch = Hotwatch::new_with_custom_delay(Duration::from_millis(100))?;
-                hotwatch.watch(file_path.clone(), move |event: Event| {
-                    if let EventKind::Modify(ModifyKind::Any) = event.kind {
-                        let fut = make_request(&file_path, &env);
-                        if let Err(e) = block_on(fut) {
-                            error!("{}", e)
-                        }
-                        info!("# Watching for changes...");
-                    }
-                    Flow::Continue
-                })?;
-
-                info!("# Watching for changes...");
-                hotwatch.run();
-                Ok(())
+                watch_mode(file_path, env).await
             } else {
                 res
             }
@@ -156,4 +137,29 @@ fn find_available_requests(cwd: &Path) -> Result<Vec<PathBuf>, eyre::Error> {
         .collect();
 
     Ok(files)
+}
+
+async fn watch_mode(file_path: PathBuf, env: toml::Table) -> Result<()> {
+    let (tx, mut rx) = mpsc::channel(1);
+
+    let mut watcher = recommended_watcher(move |res| {
+        if let Ok(res) = res {
+            if let Err(err) = tx.blocking_send(res) {
+                error!("# {}", err)
+            }
+        }
+    })?;
+
+    watcher.watch(&file_path, notify::RecursiveMode::NonRecursive)?;
+
+    loop {
+        info!("# Watching for changes...");
+        if let Some(event) = rx.recv().await {
+            if let notify::EventKind::Modify(_) = event.kind {
+                if let Err(err) = make_request(&file_path, &env).await {
+                    error!("# {}", err)
+                }
+            }
+        }
+    }
 }
