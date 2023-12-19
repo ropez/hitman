@@ -18,10 +18,17 @@ pub fn extract_variables(data: &JsonValue, scope: &Table) -> Result<Table> {
                         let selector = make_selector(jsonpath)?;
 
                         if let Some(JsonValue::String(val)) = selector.find(data).next() {
-                            let msg = format!("# Got '{}' = '{}'", key, val);
+                            let msg = format!("# Got string '{}' = '{}'", key, val);
                             info!("{}", truncate(&msg));
 
                             out.insert(key.clone(), Value::String(String::from(val)));
+                        }
+                        if let Some(JsonValue::Number(val)) = selector.find(data).next() {
+                            if let Some(integer) = val.as_i64() {
+                                let msg = format!("# Got integer '{}' = '{}'", key, val);
+                                info!("{}", truncate(&msg));
+                                out.insert(key.clone(), Value::Integer(integer));
+                            }
                         }
                     }
                     Value::Table(conf) => {
