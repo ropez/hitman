@@ -10,26 +10,24 @@ for each API request you want to hit.
 Example layout:
 
 ```
-
 project
 ├── hitman.toml
 ├── login.http
 ├── apple/get_apples.http
 ├── apple/post_new_apple.http
 ├── apple/delete_apple.http
-
 ```
 
 The HTTP files are templates for literal HTTP requests. Variables in double
 curly braces will be substituted with values from the config file.
 
 ```
-POST {{BaseUrl}}/login HTTP/1.1
+POST {{base_url}}/login HTTP/1.1
 Content-Type: application/json
 
 {
-    "username": "{{Username}}",
-    "password": "{{Password}}"
+    "username": "{{api_username}}",
+    "password": "{{api_password}}"
 }
 ```
 
@@ -37,13 +35,13 @@ The configuration file can contain global default variables, and target
 specific variables. It must contain at least one target, as a TOML table:
 
 ```toml
-Username = "admin"
+api_username = "admin"
 
 [default]
-BaseUrl = "http://example.com"
+base_url = "http://example.com"
 
 [development]
-BaseUrl = "http://localhost:8080"
+base_url = "http://localhost:8080"
 ```
 
 ## Running
@@ -96,16 +94,16 @@ response, as JSONPATH expressions.
 # login.http.toml
 
 [_extract]
-AccessToken = "$.result.access_token"
-RefreshToken = "$.result.refresh_token"
+access_token = "$.result.access_token"
+refresh_token = "$.result.refresh_token"
 ```
 
 When receiving a successful login response, these values are extracted, and
-saved as configuration variables, which be used in other requests:
+saved as configuration variables, which can be used in other requests:
 
 ```
-GET {{BaseUrl}}/apple HTTP/1.1
-Authorization: Bearer {{AccessToken}}
+GET {{base_url}}/apple HTTP/1.1
+Authorization: Bearer {{access_token}}
 ```
 
 ## Fallback values
