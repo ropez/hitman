@@ -44,6 +44,11 @@ base_url = "http://example.com"
 base_url = "http://localhost:8080"
 ```
 
+In addition to the main configuration file `hitman.toml`, there can be another
+called `hitman.local.toml`. The recommended setup, is to have a `hitman.toml`
+in a shared repository, and have a git ignored `hitman.local.toml` where each
+team member can have their personal credentials and such.
+
 ## Running
 
 First, select which target to use:
