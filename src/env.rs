@@ -57,6 +57,20 @@ fn find_environments(config: &TomlTable) -> Result<Vec<String>> {
     Ok(keys)
 }
 
+/// Get all files to watch for changes in watch mode.
+///
+/// This includes all files used by the request, except the data file.
+/// Trying to watch the data file just causes loops.
+pub fn watch_list(root_dir: &Path, file_path: &Path) -> Vec<PathBuf> {
+    vec![
+        file_path.into(),
+        file_path.with_extension("http.toml"),
+        root_dir.join(TARGET_FILE),
+        root_dir.join(CONFIG_FILE),
+        root_dir.join(LOCAL_CONFIG_FILE),
+    ]
+}
+
 pub fn load_env(
     root_dir: &Path,
     file_path: &Path,

@@ -1,7 +1,7 @@
 use eyre::{bail, Result};
 use inquire::{list_option::ListOption, Select};
 use log::{error, info};
-use notify::{recommended_watcher, EventKind, RecursiveMode, Watcher};
+use notify::EventKind;
 use request::{batch_requests, make_request};
 use std::env::current_dir;
 use std::path::{Path, PathBuf};
@@ -13,7 +13,9 @@ mod env;
 mod logging;
 mod request;
 mod util;
+mod watcher;
 use env::{find_root_dir, load_env, select_env};
+use watcher::Watcher;
 
 mod extract;
 
@@ -144,21 +146,20 @@ async fn run_once(root_dir: &Path, file_path: &Path, options: &[(String, String)
 async fn watch_mode(root_dir: &Path, file_path: &Path, options: &[(String, String)]) -> Result<()> {
     let (tx, mut rx) = mpsc::channel(1);
 
-    let mut watcher = recommended_watcher(move |res| {
-        if let Ok(event) = res {
-            tx.blocking_send(event).expect("send to channel");
-        }
-    })?;
+    let paths = env::watch_list(root_dir, file_path);
+    let mut watcher = Watcher::new(tx, paths)?;
 
-    watcher.watch(&file_path, RecursiveMode::NonRecursive)?;
+    watcher.watch_all()?;
 
     loop {
         info!("# Watching for changes...");
         if let Some(event) = rx.recv().await {
             if let EventKind::Modify(_) = event.kind {
+                watcher.unwatch_all()?;
                 if let Err(err) = run_once(root_dir, file_path, options).await {
                     error!("# {}", err)
                 }
+                watcher.watch_all()?;
             }
         }
     }
