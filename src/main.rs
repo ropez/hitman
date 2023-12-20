@@ -43,15 +43,15 @@ async fn main() -> Result<()> {
 
     let result = if let Some(file_path) = args.name {
         let file_path = cwd.join(file_path);
-        let env = load_env(&root_dir, &file_path, &args.options)?;
 
         if let Some(batch) = args.batch {
+            let env = load_env(&root_dir, &file_path, &args.options)?;
             batch_requests(&file_path, batch, &env).await
         } else {
-            let res = make_request(&file_path, &env).await;
+            let res = run_once(&root_dir, &file_path, &args.options).await;
 
             if args.watch {
-                watch_mode(file_path, env).await
+                watch_mode(&root_dir, &file_path, &args.options).await
             } else {
                 res
             }
@@ -73,9 +73,8 @@ async fn main() -> Result<()> {
 
             let file_path = &files[selected.index];
 
-            let env = load_env(&root_dir, file_path, &args.options)?;
+            let result = run_once(&root_dir, file_path, &args.options).await;
 
-            let result = make_request(&cwd.join(file_path), &env).await;
             if !args.repeat {
                 break result;
             }
@@ -105,13 +104,10 @@ async fn main() -> Result<()> {
 }
 
 fn is_user_cancelation(err: &eyre::Report) -> bool {
-    matches!(
-        err.downcast_ref(),
-        Some(inquire::InquireError::OperationCanceled)
-    ) || matches!(
-        err.downcast_ref(),
-        Some(inquire::InquireError::OperationInterrupted)
-    )
+    use inquire::InquireError::*;
+    false
+        || matches!(err.downcast_ref(), Some(OperationCanceled))
+        || matches!(err.downcast_ref(), Some(OperationInterrupted))
 }
 
 fn find_available_requests(cwd: &Path) -> Result<Vec<PathBuf>> {
@@ -139,7 +135,13 @@ fn find_available_requests(cwd: &Path) -> Result<Vec<PathBuf>> {
     Ok(files)
 }
 
-async fn watch_mode(file_path: PathBuf, env: toml::Table) -> Result<()> {
+async fn run_once(root_dir: &Path, file_path: &Path, options: &[(String, String)]) -> Result<()> {
+    let env = load_env(root_dir, file_path, options)?;
+
+    make_request(file_path, &env).await
+}
+
+async fn watch_mode(root_dir: &Path, file_path: &Path, options: &[(String, String)]) -> Result<()> {
     let (tx, mut rx) = mpsc::channel(1);
 
     let mut watcher = recommended_watcher(move |res| {
@@ -154,7 +156,7 @@ async fn watch_mode(file_path: PathBuf, env: toml::Table) -> Result<()> {
         info!("# Watching for changes...");
         if let Some(event) = rx.recv().await {
             if let EventKind::Modify(_) = event.kind {
-                if let Err(err) = make_request(&file_path, &env).await {
+                if let Err(err) = run_once(root_dir, file_path, options).await {
                     error!("# {}", err)
                 }
             }

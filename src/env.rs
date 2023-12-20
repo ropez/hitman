@@ -60,7 +60,7 @@ fn find_environments(config: &TomlTable) -> Result<Vec<String>> {
 pub fn load_env(
     root_dir: &Path,
     file_path: &Path,
-    options: &Vec<(String, String)>,
+    options: &[(String, String)],
 ) -> Result<TomlTable> {
     use Value::Table;
 
