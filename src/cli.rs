@@ -34,9 +34,13 @@ pub struct Args {
     #[arg(short, long, requires = "name")]
     pub non_interactive: bool,
 
-    /// Number of parallel requests
+    /// Number of requests to send in batch
     #[arg(long, conflicts_with = "repeat", requires = "name")]
     pub batch: Option<i32>,
+
+    /// Number of requests to send in batch
+    #[arg(short, long, requires = "batch")]
+    pub connections: Option<i32>,
 
     /// Watch file for changes (implies non-interactove)
     #[arg(short, long, requires = "name", conflicts_with = "batch")]

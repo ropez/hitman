@@ -48,7 +48,7 @@ async fn main() -> Result<()> {
 
         if let Some(batch) = args.batch {
             let env = load_env(&root_dir, &file_path, &args.options)?;
-            batch_requests(&file_path, batch, &env).await
+            batch_requests(&file_path, batch, args.connections.unwrap_or(10), &env).await
         } else {
             let res = run_once(&root_dir, &file_path, &args.options).await;
 
