@@ -2,9 +2,10 @@ use eyre::{bail, ContextCompat, Result};
 use futures::future::join_all;
 use httparse::Status::*;
 use log::{info, log_enabled, warn, Level};
-use reqwest::{Client, Method, Request, RequestBuilder, Response, Url};
+use reqwest::{Client, Method, Response, Url};
 use serde_json::Value;
 use spinoff::{spinners, Color, Spinner};
+use std::convert::identity;
 use std::fs::read_to_string;
 use std::path::Path;
 use std::str;
@@ -17,14 +18,31 @@ use crate::env::update_data;
 use crate::extract::extract_variables;
 use crate::logging;
 use crate::substitute::substitute;
-use crate::util::{truncate, IterExt};
+use crate::util::{split_work, truncate, IterExt};
 
-pub async fn batch_requests(file_path: &Path, batch: i32, env: &Table) -> Result<()> {
+static USER_AGENT: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"),);
+
+fn build_client() -> Result<Client> {
+    let client = Client::builder().user_agent(USER_AGENT).build()?;
+    Ok(client)
+}
+
+pub async fn batch_requests(
+    file_path: &Path,
+    batch: i32,
+    connections: i32,
+    env: &Table,
+) -> Result<()> {
     if batch < 1 {
         bail!("Batch size must be at least 1");
     }
+    if connections < 1 {
+        bail!("Connections must be at least 1");
+    }
 
-    warn!("# Sending {batch} parallel requests...");
+    let client = build_client()?;
+
+    warn!("# Sending {batch} requests on {connections} parallel connections...");
 
     let buf = substitute(&read_to_string(file_path)?, env)?;
 
@@ -34,20 +52,28 @@ pub async fn batch_requests(file_path: &Path, batch: i32, env: &Table) -> Result
     // Run each request in a separate tokio task.
     // It might make it more efficient, if we let each task run a series
     // of requests using a single connection.
-    let handles = (0..batch).map(|_| {
+    let handles = split_work(batch, connections).map(|size| {
         let buf = buf.clone();
+        let client = client.clone();
         spawn(async move {
-            match do_request(&buf).await {
-                Ok((res, elapsed)) => Some((res.status().as_u16(), elapsed)),
-                Err(_) => None,
+            let mut results = Vec::new();
+            for _ in 0..size {
+                let res = match do_request(&client, &buf).await {
+                    Ok((res, elapsed)) => Some((res.status().as_u16(), elapsed)),
+                    Err(_) => None,
+                };
+                results.push(res);
             }
+            results
         })
     });
 
     let results: Vec<_> = join_all(handles)
         .await
         .into_iter()
-        .filter_map(|h| h.ok().flatten())
+        .filter_map(|h| h.ok())
+        .flatten()
+        .filter_map(identity)
         .collect();
 
     spinner.stop();
@@ -58,7 +84,7 @@ pub async fn batch_requests(file_path: &Path, batch: i32, env: &Table) -> Result
     let statuses = results.iter().map(|(s, _)| s).counted();
     let statuses = statuses
         .iter()
-        .map(|(s, c)| format!("{}x{}", s, c))
+        .map(|(s, c)| format!("{} ({})", s, c))
         .collect::<Vec<_>>()
         .join(", ");
 
@@ -73,13 +99,15 @@ pub async fn batch_requests(file_path: &Path, batch: i32, env: &Table) -> Result
 }
 
 pub async fn make_request(file_path: &Path, env: &Table) -> Result<()> {
+    let client = build_client()?;
+
     let buf = substitute(&read_to_string(file_path)?, env)?;
 
     logging::clear_screen();
     print_request(&buf);
 
     let mut spinner = Spinner::new(spinners::BouncingBar, "", Color::Yellow);
-    let (response, elapsed) = do_request(&buf).await?;
+    let (response, elapsed) = do_request(&client, &buf).await?;
     spinner.stop();
 
     print_response(&response)?;
@@ -95,7 +123,7 @@ pub async fn make_request(file_path: &Path, env: &Table) -> Result<()> {
     Ok(())
 }
 
-async fn do_request(buf: &str) -> Result<(Response, Duration)> {
+async fn do_request(client: &Client, buf: &str) -> Result<(Response, Duration)> {
     let mut headers = [httparse::EMPTY_HEADER; 64];
     let mut req = httparse::Request::new(&mut headers);
 
@@ -106,9 +134,8 @@ async fn do_request(buf: &str) -> Result<(Response, Duration)> {
 
     let method = Method::from_str(method)?;
     let url = Url::parse(url)?;
-    let client = Client::new();
 
-    let mut builder = RequestBuilder::from_parts(client, Request::new(method, url));
+    let mut builder = client.request(method, url);
 
     if let Complete(offset) = parse_result {
         let body = &buf[offset..];

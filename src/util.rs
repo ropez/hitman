@@ -35,7 +35,32 @@ where
     }
 }
 
-// iter().counted()
+pub struct SplitWork {
+    total_count: i32,
+    workers: i32,
+}
+
+pub fn split_work(total_count: i32, workers: i32) -> SplitWork {
+    SplitWork {
+        total_count,
+        workers,
+    }
+}
+
+impl Iterator for SplitWork {
+    type Item = i32;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.total_count > 0 {
+            let c = (self.total_count + self.workers - 1) / self.workers;
+            self.total_count -= c;
+            self.workers -= 1;
+            Some(c)
+        } else {
+            None
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -78,5 +103,26 @@ mod tests {
         assert_eq!(1, result["100"]);
         assert_eq!(3, result["200"]);
         assert_eq!(1, result["300"]);
+    }
+
+    #[test]
+    fn splits_work_into_equal_chunks() {
+        let chunks: Vec<_> = split_work(100, 4).collect();
+
+        assert_eq!(chunks, vec![25, 25, 25, 25]);
+    }
+
+    #[test]
+    fn splits_work_into_almost_equal_chunks() {
+        let chunks: Vec<_> = split_work(15, 10).collect();
+
+        assert_eq!(chunks, vec![2, 2, 2, 2, 2, 1, 1, 1, 1, 1]);
+    }
+
+    #[test]
+    fn splits_work_and_eliminates_zeros() {
+        let chunks: Vec<_> = split_work(4, 10).collect();
+
+        assert_eq!(chunks, vec![1, 1, 1, 1]);
     }
 }
