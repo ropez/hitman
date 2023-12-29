@@ -4,6 +4,7 @@ use httparse::Status::*;
 use log::{info, log_enabled, warn, Level};
 use reqwest::{Client, Method, Request, RequestBuilder, Response, Url};
 use serde_json::Value;
+use spinoff::{spinners, Color, Spinner};
 use std::fs::read_to_string;
 use std::path::Path;
 use std::str;
@@ -28,6 +29,7 @@ pub async fn batch_requests(file_path: &Path, batch: i32, env: &Table) -> Result
     let buf = substitute(&read_to_string(file_path)?, env)?;
 
     let t = std::time::Instant::now();
+    let mut spinner = Spinner::new(spinners::BouncingBall, "", Color::Yellow);
 
     // Run each request in a separate tokio task.
     // It might make it more efficient, if we let each task run a series
@@ -48,6 +50,7 @@ pub async fn batch_requests(file_path: &Path, batch: i32, env: &Table) -> Result
         .filter_map(|h| h.ok().flatten())
         .collect();
 
+    spinner.stop();
     let elapsed = t.elapsed();
 
     let average = results.iter().map(|(_, d)| d).sum::<Duration>() / results.len() as u32;
@@ -75,7 +78,9 @@ pub async fn make_request(file_path: &Path, env: &Table) -> Result<()> {
     logging::clear_screen();
     print_request(&buf);
 
+    let mut spinner = Spinner::new(spinners::BouncingBar, "", Color::Yellow);
     let (response, elapsed) = do_request(&buf).await?;
+    spinner.stop();
 
     print_response(&response)?;
 
