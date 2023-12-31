@@ -1,0 +1,2 @@
+[_extract]
+reponame = { _ = '$', name = '$.name', value = '$.full_name' }

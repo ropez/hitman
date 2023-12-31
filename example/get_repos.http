@@ -1,0 +1,2 @@
+GET {{base_url}}/users/{{username}}/repos HTTP/1.1
+Accept: application/vnd.github+json
