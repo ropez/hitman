@@ -108,6 +108,7 @@ fn select_replacement(key: &str, values: &[Value]) -> Result<String> {
                 i,
                 match v {
                     Value::Table(t) => match t.get("name") {
+                        Some(Value::String(value)) => value.clone(),
                         Some(value) => value.to_string(),
                         None => t.to_string(),
                     },
@@ -124,6 +125,7 @@ fn select_replacement(key: &str, values: &[Value]) -> Result<String> {
 
     match &values[selected.index] {
         Value::Table(t) => match t.get("value") {
+            Some(Value::String(value)) => Ok(value.clone()),
             Some(value) => Ok(value.to_string()),
             _ => bail!(SubstituteError::ReplacementNotFound { key: key.into() }),
         },
