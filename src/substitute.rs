@@ -24,33 +24,42 @@ pub fn substitute(input: &str, env: &Table) -> Result<String> {
     let mut output = String::new();
 
     for line in input.lines() {
-        let mut slice = line;
-        loop {
-            match slice.find("{{") {
-                None => {
-                    if slice.contains("}}") {
-                        bail!(SubstituteError::SyntaxError)
-                    }
-                    output.push_str(slice);
-                    break;
+        output.push_str(&substitute_line(line, env)?);
+        output.push('\n');
+    }
+
+    Ok(output)
+}
+
+fn substitute_line(line: &str, env: &Table) -> Result<String> {
+    let mut output = String::new();
+    let mut slice = line;
+    loop {
+        match slice.find("{{") {
+            None => {
+                if slice.contains("}}") {
+                    bail!(SubstituteError::SyntaxError)
                 }
-                Some(pos) => {
-                    output.push_str(&slice[..pos]);
-                    slice = &slice[pos..];
+                output.push_str(slice);
+                break;
+            }
+            Some(pos) => {
+                output.push_str(&slice[..pos]);
+                slice = &slice[pos..];
 
-                    let Some(end) = slice.find("}}").map(|i| i + 2) else {
-                        bail!(SubstituteError::SyntaxError);
-                    };
+                let Some(end) = slice.find("}}").map(|i| i + 2) else {
+                    bail!(SubstituteError::SyntaxError);
+                };
 
-                    let rep = find_replacement(&slice[2..end - 2], env)?;
-                    output.push_str(&rep);
+                let rep = find_replacement(&slice[2..end - 2], env)?;
 
-                    slice = &slice[end..];
-                }
+                // Nested substitution
+                let rep = substitute_line(&rep, env)?;
+                output.push_str(&rep);
+
+                slice = &slice[end..];
             }
         }
-
-        output.push('\n');
     }
 
     Ok(output)
@@ -166,15 +175,18 @@ mod tests {
     use super::*;
 
     fn create_env() -> Table {
-        let mut env = Table::new();
+        toml::from_str(
+            r#"
+            url = "example.com"
+            token = "abc123"
+            integer = 42
+            float = 99.99
+            boolean = true
 
-        env.insert("url".to_string(), Value::from("example.com"));
-        env.insert("token".to_string(), Value::from("abc123"));
-        env.insert("integer".to_string(), Value::from(42));
-        env.insert("float".to_string(), Value::from(99.99));
-        env.insert("boolean".to_string(), Value::from(true));
-
-        env
+            nested = "the answer is {{integer}}"
+            "#,
+        )
+        .unwrap()
     }
 
     #[test]
@@ -255,6 +267,14 @@ mod tests {
         let res = substitute("foo {{url}}, bar {{token}}\n", &env).unwrap();
 
         assert_eq!(&res, "foo example.com, bar abc123\n");
+    }
+
+    #[test]
+    fn substitutes_nested_variable() {
+        let env = create_env();
+        let res = substitute("# {{nested}}!\n", &env).unwrap();
+
+        assert_eq!(&res, "# the answer is 42!\n");
     }
 
     #[test]
