@@ -2,7 +2,7 @@ use eyre::{bail, Result};
 use inquire::{list_option::ListOption, Select};
 use log::{error, info};
 use notify::EventKind;
-use request::{batch_requests, make_request};
+use request::{flurry_attack, make_request};
 use std::env::current_dir;
 use std::path::{Path, PathBuf};
 use tokio::sync::mpsc;
@@ -28,7 +28,7 @@ use prompt::set_interactive_mode;
 async fn main() -> Result<()> {
     let args = cli::parse_args();
 
-    logging::init(args.verbose, args.quiet, args.batch.is_some())?;
+    logging::init(args.verbose, args.quiet, args.flurry.is_some())?;
 
     set_interactive_mode(!(args.non_interactive || args.watch));
 
@@ -46,9 +46,15 @@ async fn main() -> Result<()> {
     let result = if let Some(file_path) = args.name {
         let file_path = cwd.join(file_path);
 
-        if let Some(batch) = args.batch {
+        if let Some(flurry_size) = args.flurry {
             let env = load_env(&root_dir, &file_path, &args.options)?;
-            batch_requests(&file_path, batch, args.connections.unwrap_or(10), &env).await
+            flurry_attack(
+                &file_path,
+                flurry_size,
+                args.connections.unwrap_or(10),
+                &env,
+            )
+            .await
         } else {
             let res = run_once(&root_dir, &file_path, &args.options).await;
 

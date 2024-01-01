@@ -19,7 +19,14 @@ pub struct Args {
     pub repeat: bool,
 
     /// Select a target from the config file
-    #[arg(short, long, conflicts_with = "name", conflicts_with = "repeat")]
+    #[arg(
+        short,
+        long,
+        conflicts_with = "name",
+        conflicts_with = "repeat",
+        conflicts_with = "flurry",
+        conflicts_with = "watch"
+    )]
     pub select: bool,
 
     /// Show more output
@@ -34,16 +41,16 @@ pub struct Args {
     #[arg(short, long, requires = "name")]
     pub non_interactive: bool,
 
-    /// Number of requests to send in batch
-    #[arg(long, conflicts_with = "repeat", requires = "name")]
-    pub batch: Option<i32>,
+    /// Flurry attack an API by sending many identical requests in a short time.
+    #[arg(short, long, conflicts_with = "repeat", requires = "name")]
+    pub flurry: Option<i32>,
 
-    /// Number of requests to send in batch
-    #[arg(short, long, requires = "batch")]
+    /// Number concurrent connections used in a flurry attack.
+    #[arg(short, long, requires = "flurry")]
     pub connections: Option<i32>,
 
-    /// Watch file for changes (implies non-interactove)
-    #[arg(short, long, requires = "name", conflicts_with = "batch")]
+    /// Watch file for changes (implies non-interactove).
+    #[arg(short, long, requires = "name", conflicts_with = "flurry")]
     pub watch: bool,
 }
 

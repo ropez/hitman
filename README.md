@@ -133,7 +133,7 @@ By default, hitman will ask the user to input a value. The prompt will show to
 the user that there is a default value, which will be used if the user simple
 hits Enter, instead of the empty string.
 
-When run in a non-interactive mode (`-n`, `--batch` etc), the fallback value
+When run in a non-interactive mode (`-n`, `--flurry` etc), the fallback value
 will be used without prompting the user, unless a value is specified in the
 config, or given on the command line.
 
@@ -167,17 +167,17 @@ In other cases, we might need something like `$.items`, `$.data` etc.
 The other JSON-paths, `name` and `value` refer to data within each object of
 the array.
 
-## Batch execution
+## Flurry rush attach
 
 It's possible to use hitman for simple performance/stress testing an API. This
-is done by giving `--batch N` on the command line, where `N` is the number of
+is done by giving `--flurry N` on the command line, where `N` is the number of
 requests to send. In this mode, interactive prompts are currently not
 supported, so it can only be used when all substitutions are available in
 scope, have fallback values, or are given on the command line.
 
 By default, it uses 10 parallel connections to execute `N` requests as quickly
 as possible. It's possible to specify the number of connections with the
-`--connections` option. For instance, `--batch 100 --connections 100` will try
+`--connections` option. For instance, `--flurry 100 --connections 100` will try
 to send all 100 requests in parallel.
 
 ## Watch mode

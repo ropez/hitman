@@ -27,14 +27,14 @@ fn build_client() -> Result<Client> {
     Ok(client)
 }
 
-pub async fn batch_requests(
+pub async fn flurry_attack(
     file_path: &Path,
-    batch: i32,
+    flurry_size: i32,
     connections: i32,
     env: &Table,
 ) -> Result<()> {
-    if batch < 1 {
-        bail!("Batch size must be at least 1");
+    if flurry_size < 1 {
+        bail!("Flurry size must be at least 1");
     }
     if connections < 1 {
         bail!("Connections must be at least 1");
@@ -42,7 +42,7 @@ pub async fn batch_requests(
 
     let client = build_client()?;
 
-    warn!("# Sending {batch} requests on {connections} parallel connections...");
+    warn!("# Sending {flurry_size} requests on {connections} parallel connections...");
 
     let buf = substitute(&read_to_string(file_path)?, env)?;
 
@@ -52,7 +52,7 @@ pub async fn batch_requests(
     // Run each request in a separate tokio task.
     // It might make it more efficient, if we let each task run a series
     // of requests using a single connection.
-    let handles = split_work(batch, connections).map(|size| {
+    let handles = split_work(flurry_size, connections).map(|size| {
         let buf = buf.clone();
         let client = client.clone();
         spawn(async move {
@@ -89,7 +89,7 @@ pub async fn batch_requests(
         .join(", ");
 
     warn!("# Finished in {:.2?}", elapsed);
-    warn!("# {} of {} requests completed", results.len(), batch);
+    warn!("# {} of {} requests completed", results.len(), flurry_size);
     warn!("# Results: {}", statuses);
     warn!("# Average: {:.2?}", average);
     warn!("# Slowest: {:.2?}", Iterator::max(results.iter()).unwrap());
