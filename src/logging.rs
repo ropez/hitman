@@ -47,9 +47,9 @@ impl Log for Logger {
     }
 }
 
-pub fn init(verbose: bool, quiet: bool, batch: bool) -> Result<(), SetLoggerError> {
+pub fn init(verbose: bool, quiet: bool, is_flurry: bool) -> Result<(), SetLoggerError> {
     let logger = Logger {
-        level: match (verbose, quiet, batch) {
+        level: match (verbose, quiet, is_flurry) {
             (_, true, _) => Level::Error,
             (_, _, true) => Level::Warn,
             (true, _, _) => Level::Debug,
