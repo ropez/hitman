@@ -1,11 +1,11 @@
 # HITMAN
 
-A command line tool for hitting API endpoints, without bullshit.
+A command line tool for hitting API endpoints.
 
 ## Basic setup
 
 Create your project folder, containing a TOML config file, and HTTP request files
-for each API request you want to hit.
+for each API you want to hit.
 
 Example layout:
 
@@ -167,7 +167,7 @@ In other cases, we might need something like `$.items`, `$.data` etc.
 The other JSON-paths, `name` and `value` refer to data within each object of
 the array.
 
-## Flurry rush attach
+## Flurry rush attack
 
 It's possible to use hitman for simple performance/stress testing an API. This
 is done by giving `--flurry N` on the command line, where `N` is the number of
