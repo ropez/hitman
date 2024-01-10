@@ -1,5 +1,5 @@
 use crate::prompt::{fuzzy_match, is_interactive_mode};
-use eyre::{bail, Result};
+use anyhow::{bail, Result};
 use inquire::{list_option::ListOption, DateSelect, Select, Text};
 use std::str;
 use thiserror::Error;

@@ -1,4 +1,4 @@
-use eyre::{bail, ContextCompat, Result};
+use anyhow::{bail, Context, Result};
 use futures::future::join_all;
 use httparse::Status::*;
 use log::{info, log_enabled, warn, Level};

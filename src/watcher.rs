@@ -1,4 +1,4 @@
-use eyre::Result;
+use anyhow::Result;
 use notify::{recommended_watcher, Event, RecommendedWatcher, RecursiveMode, Watcher as _Watcher};
 use std::path::PathBuf;
 

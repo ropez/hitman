@@ -1,4 +1,4 @@
-use eyre::{bail, eyre, Result};
+use anyhow::{anyhow, bail, Result};
 use log::info;
 use toml::{Table, Value};
 
@@ -87,7 +87,7 @@ fn make_item_selectors(conf: &Table) -> Result<Vec<(String, Selector)>> {
 }
 
 fn make_selector(path: &str) -> Result<Selector> {
-    Selector::new(path).map_err(|err| eyre!("Invalid jsonpath: {}", err))
+    Selector::new(path).map_err(|err| anyhow!("Invalid jsonpath: {}", err))
 }
 
 fn get_string(table: &Table, key: &str) -> Result<String> {
