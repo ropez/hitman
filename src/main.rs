@@ -1,4 +1,4 @@
-use eyre::{bail, Result};
+use anyhow::{Context, Result};
 use inquire::{list_option::ListOption, Select};
 use log::{error, info};
 use notify::EventKind;
@@ -32,9 +32,7 @@ async fn main() -> Result<()> {
 
     set_interactive_mode(!(args.non_interactive || args.watch));
 
-    let Some(root_dir) = find_root_dir()? else {
-        bail!("No hitman.toml found");
-    };
+    let root_dir = find_root_dir()?.context("No hitman.toml found")?;
 
     if args.select {
         select_env(&root_dir)?;
@@ -111,7 +109,7 @@ async fn main() -> Result<()> {
     }
 }
 
-fn is_user_cancelation(err: &eyre::Report) -> bool {
+fn is_user_cancelation(err: &anyhow::Error) -> bool {
     use inquire::InquireError::*;
     false
         || matches!(err.downcast_ref(), Some(OperationCanceled))

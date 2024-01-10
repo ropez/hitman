@@ -1,4 +1,4 @@
-use eyre::{bail, Result};
+use anyhow::{bail, Result};
 use inquire::Select;
 use log::warn;
 use reqwest::cookie::CookieStore;
