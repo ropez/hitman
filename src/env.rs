@@ -1,6 +1,8 @@
 use eyre::{bail, Result};
 use inquire::Select;
 use log::warn;
+use reqwest::cookie::CookieStore;
+use reqwest::Url;
 use std::env::current_dir;
 use std::fs::{self, read_to_string};
 use std::path::{Path, PathBuf};
@@ -12,6 +14,48 @@ const CONFIG_FILE: &str = "hitman.toml";
 const LOCAL_CONFIG_FILE: &str = "hitman.local.toml";
 const TARGET_FILE: &str = ".hitman-target";
 const DATA_FILE: &str = ".hitman-data.toml";
+
+const COOKIE_KEY: &str = "Cookies";
+pub struct HitmanCookieJar;
+
+impl CookieStore for HitmanCookieJar {
+    fn set_cookies(
+        &self,
+        cookie_headers: &mut dyn Iterator<Item = &reqwest::header::HeaderValue>,
+        _: &Url,
+    ) {
+        let cookies = cookie_headers
+            .filter_map(|c| {
+                let s = std::str::from_utf8(c.as_bytes()).ok()?;
+                Some(Value::String(s.to_string()))
+            })
+            .collect::<Vec<_>>();
+
+        let mut out = TomlTable::new();
+        out.insert(COOKIE_KEY.to_string(), Value::Array(cookies));
+
+        let _ = update_data(&out);
+    }
+
+    fn cookies(&self, _: &Url) -> Option<reqwest::header::HeaderValue> {
+        let root_dir = find_root_dir().ok()??;
+        let data_file = read_toml(&root_dir.join(DATA_FILE)).ok()?;
+
+        match data_file.get(COOKIE_KEY)? {
+            Value::Array(arr) => {
+                let headers = arr
+                    .iter()
+                    .filter_map(|it| cookie::Cookie::parse(it.as_str()?).ok())
+                    .map(|cookie| format!("{}={}", cookie.name(), cookie.value()).to_string())
+                    .collect::<Vec<_>>()
+                    .join("; ");
+
+                reqwest::header::HeaderValue::from_str(&headers).ok()
+            }
+            _ => None,
+        }
+    }
+}
 
 pub fn select_env(root_dir: &Path) -> Result<()> {
     let config = read_and_merge_config(root_dir)?;
