@@ -10,11 +10,12 @@ use std::fs::read_to_string;
 use std::path::Path;
 use std::str;
 use std::str::FromStr;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::spawn;
 use toml::Table;
 
-use crate::env::update_data;
+use crate::env::{update_data, HitmanCookieJar};
 use crate::extract::extract_variables;
 use crate::logging;
 use crate::substitute::substitute;
@@ -23,7 +24,10 @@ use crate::util::{split_work, truncate, IterExt};
 static USER_AGENT: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"),);
 
 fn build_client() -> Result<Client> {
-    let client = Client::builder().user_agent(USER_AGENT).build()?;
+    let client = Client::builder()
+        .user_agent(USER_AGENT)
+        .cookie_provider(Arc::new(HitmanCookieJar))
+        .build()?;
     Ok(client)
 }
 
