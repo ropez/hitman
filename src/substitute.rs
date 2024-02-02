@@ -65,18 +65,27 @@ fn substitute_line(line: &str, env: &Table) -> Result<String> {
     Ok(output)
 }
 
+// Only valid with ascii_alphabetic, ascii_digit or underscores in key name
+fn valid_character(c: &char) -> bool {
+    c.is_ascii_alphabetic() || c.is_ascii_digit() || *c == '_'
+}
+
 fn find_replacement(placeholder: &str, env: &Table) -> Result<String> {
     let mut parts = placeholder.split('|');
 
     let key = parts.next().unwrap_or("").trim();
-    match env.get(key) {
-        Some(Value::String(v)) => Ok(v.to_string()),
-        Some(Value::Integer(v)) => Ok(v.to_string()),
-        Some(Value::Float(v)) => Ok(v.to_string()),
-        Some(Value::Boolean(v)) => Ok(v.to_string()),
+    let parsed_key = key.chars().filter(valid_character).collect::<String>();
+
+    let parse = |v: &str| key.replace(&parsed_key, v);
+
+    match env.get(&parsed_key) {
+        Some(Value::String(v)) => Ok(parse(v)),
+        Some(Value::Integer(v)) => Ok(parse(&v.to_string())),
+        Some(Value::Float(v)) => Ok(parse(&v.to_string())),
+        Some(Value::Boolean(v)) => Ok(parse(&v.to_string())),
         Some(Value::Array(arr)) => {
             if is_interactive_mode() {
-                Ok(select_replacement(key, arr)?)
+                Ok(select_replacement(&parsed_key, arr)?)
             } else {
                 let suggestions: Vec<String> = arr
                     .iter()
@@ -88,7 +97,7 @@ fn find_replacement(placeholder: &str, env: &Table) -> Result<String> {
                     .collect();
                 let suggestions = suggestions.join("\n");
                 bail!(SubstituteError::ReplacementNotSelected {
-                    key: key.into(),
+                    key: parsed_key,
                     suggestions
                 })
             }
@@ -98,11 +107,11 @@ fn find_replacement(placeholder: &str, env: &Table) -> Result<String> {
             let fallback = parts.next().map(|fb| fb.trim());
 
             if is_interactive_mode() {
-                Ok(prompt_user(key, fallback)?)
+                prompt_user(&parsed_key, fallback)
             } else {
                 fallback
                     .map(|f| f.to_string())
-                    .ok_or(SubstituteError::ReplacementNotFound { key: key.into() }.into())
+                    .ok_or(SubstituteError::ReplacementNotFound { key: parsed_key }.into())
             }
         }
     }
@@ -182,6 +191,7 @@ mod tests {
             integer = 42
             float = 99.99
             boolean = true
+            api_url1 = "foo.com"
 
             nested = "the answer is {{integer}}"
             "#,
@@ -275,6 +285,54 @@ mod tests {
         let res = substitute("# {{nested}}!\n", &env).unwrap();
 
         assert_eq!(&res, "# the answer is 42!\n");
+    }
+
+    #[test]
+    fn substitutes_only_characters_inside_quotes() {
+        let env = create_env();
+        let res = substitute("foo: {{ \"boolean\" }}", &env).unwrap();
+
+        assert_eq!(&res, "foo: \"true\"\n");
+    }
+
+    #[test]
+    fn substitutes_only_characters_inside_list() {
+        let env = create_env();
+        let res = substitute("foo: {{ [url] }}", &env).unwrap();
+
+        assert_eq!(&res, "foo: [example.com]\n");
+    }
+
+    #[test]
+    fn substitutes_only_characters_inside_list_inside_quotes() {
+        let env = create_env();
+        let res = substitute("foo: {{ [\"url\"] }}", &env).unwrap();
+
+        assert_eq!(&res, "foo: [\"example.com\"]\n");
+    }
+
+    #[test]
+    fn substitutes_variable_on_the_same_line_in_list() {
+        let env = create_env();
+        let res = substitute("foo: [{{ \"url\" }}, {{ \"integer\" }}]", &env).unwrap();
+
+        assert_eq!(&res, "foo: [\"example.com\", \"42\"]\n");
+    }
+
+    #[test]
+    fn substitutes_only_numbers_inside_quote() {
+        let env = create_env();
+        let res = substitute("foo: {{ \"integer\" }}", &env).unwrap();
+
+        assert_eq!(&res, "foo: \"42\"\n");
+    }
+
+    #[test]
+    fn substitutes_variable_with_underscore_and_number_in_name() {
+        let env = create_env();
+        let res = substitute("foo: {{ api_url1 }}", &env).unwrap();
+
+        assert_eq!(&res, "foo: foo.com\n");
     }
 
     #[test]
