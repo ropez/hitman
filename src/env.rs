@@ -46,7 +46,7 @@ impl CookieStore for HitmanCookieJar {
                 let headers = arr
                     .iter()
                     .filter_map(|it| cookie::Cookie::parse(it.as_str()?).ok())
-                    .map(|cookie| format!("{}={}", cookie.name(), cookie.value()).to_string())
+                    .map(|cookie| format!("{}={}", cookie.name(), cookie.value()))
                     .collect::<Vec<_>>()
                     .join("; ");
 
