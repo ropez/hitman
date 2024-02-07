@@ -78,7 +78,7 @@ pub fn clear_screen() {
             .expect("failed to wait");
     } else {
         // Untested!
-        print!("\x1B[2J");
+        println!("\x1B[2J");
     }
 }
 
