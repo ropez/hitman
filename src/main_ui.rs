@@ -22,13 +22,14 @@ use ratatui::{
     widgets::{self, Block, Borders, HighlightSpacing, List, ListState, Paragraph},
     Frame, Terminal,
 };
+use serde_json::Value;
 
 use hitman::env::{find_available_requests, find_root_dir, select_env};
 use hitman::request::do_request;
 use hitman::{
     env::load_env, extract::extract_variables, request::build_client, substitute::substitute,
 };
-use serde_json::Value;
+
 use ui::{
     output::{OutputView, OutputViewState},
     select::{RequestSelector, RequestSelectorState},
@@ -38,42 +39,24 @@ mod ui;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let _deferred = RawMode::enable()?;
+    let _guard = Screen::enable()?;
 
-    stdout().execute(EnterAlternateScreen)?;
     let mut terminal = Terminal::new(CrosstermBackend::new(stdout()))?;
 
     let root_dir = find_root_dir()?.context("No hitman.toml found")?;
-    // select_env(&root_dir)?;
 
-    let reqs = find_available_requests(&root_dir)?;
-    let reqs: Vec<String> = reqs
-        .iter()
-        .filter_map(|p| p.to_str())
-        .map(|s| String::from(s))
-        .collect();
-
-    let mut selector_state = RequestSelectorState::new(&reqs);
-    let mut output = String::new();
-    let mut output_scroll: (u16, u16) = (0, 0);
-    let mut output_state = OutputViewState::default();
+    let mut state = State::new(&root_dir)?;
 
     let mut should_quit = false;
     while !should_quit {
-        terminal.draw(|frame| render_ui(frame, &mut selector_state, &mut output_state))?;
-        should_quit = handle_events(&root_dir, &mut selector_state, &mut output_state).await?;
+        terminal.draw(|frame| render_ui(frame, &mut state))?;
+        should_quit = handle_events(&root_dir, &mut state).await?;
     }
-
-    stdout().execute(LeaveAlternateScreen)?;
 
     Ok(())
 }
 
-fn render_ui(
-    frame: &mut Frame,
-    selector_state: &mut RequestSelectorState,
-    output_state: &mut OutputViewState,
-) {
+fn render_ui(frame: &mut Frame, state: &mut State) {
     let vert_layout = Layout::new(
         Direction::Vertical,
         [
@@ -90,16 +73,20 @@ fn render_ui(
     )
     .split(vert_layout[0]);
 
-    frame.render_stateful_widget(RequestSelector::default(), main_layout[0], selector_state);
+    frame.render_stateful_widget(
+        RequestSelector::default(),
+        main_layout[0],
+        &mut state.selector_state,
+    );
 
-    frame.render_stateful_widget(OutputView::default(), main_layout[1], output_state);
+    frame.render_stateful_widget(
+        OutputView::default(),
+        main_layout[1],
+        &mut state.output_state,
+    );
 }
 
-async fn handle_events(
-    root_dir: &Path,
-    selector_state: &mut RequestSelectorState,
-    output_state: &mut OutputViewState,
-) -> Result<bool> {
+async fn handle_events(root_dir: &Path, state: &mut State) -> Result<bool> {
     if event::poll(Duration::from_millis(50))? {
         match event::read()? {
             Event::Key(key) if key.kind == KeyEventKind::Press => match key.code {
@@ -107,18 +94,18 @@ async fn handle_events(
                     return Ok(true);
                 }
                 KeyCode::Char('j') => {
-                    selector_state.select_next();
+                    state.selector_state.select_next();
                 }
                 KeyCode::Char('k') => {
-                    selector_state.select_prev();
+                    state.selector_state.select_prev();
                 }
                 KeyCode::Char('p') => {
-                    output_state.scroll_up();
+                    state.output_state.scroll_up();
                 }
                 KeyCode::Char('n') => {
-                    output_state.scroll_down();
+                    state.output_state.scroll_down();
                 }
-                KeyCode::Enter => match selector_state.selected_path() {
+                KeyCode::Enter => match state.selector_state.selected_path() {
                     Some(file_path) => {
                         let options = vec![];
                         let path = PathBuf::try_from(file_path)?;
@@ -152,7 +139,7 @@ async fn handle_events(
                             // update_data(&vars)?;
                         }
 
-                        output_state.update(request, response);
+                        state.output_state.update(request, response);
                     }
                     None => (),
                 },
@@ -164,17 +151,44 @@ async fn handle_events(
     Ok(false)
 }
 
-struct RawMode;
+struct State {
+    selector_state: RequestSelectorState,
+    output_state: OutputViewState,
+}
 
-impl RawMode {
-    fn enable() -> Result<Self, std::io::Error> {
-        enable_raw_mode()?;
-        Ok(RawMode)
+impl State {
+    pub fn new(root_dir: &Path) -> Result<Self> {
+        let reqs = find_available_requests(&root_dir)?;
+        let reqs: Vec<String> = reqs
+            .iter()
+            .filter_map(|p| p.to_str())
+            .map(|s| String::from(s))
+            .collect();
+
+        let mut selector_state = RequestSelectorState::new(&reqs);
+        let mut output_state = OutputViewState::default();
+
+        Ok(Self {
+            selector_state,
+            output_state,
+        })
     }
 }
 
-impl Drop for RawMode {
+struct Screen;
+
+impl Screen {
+    fn enable() -> Result<Self, std::io::Error> {
+        enable_raw_mode()?;
+        stdout().execute(EnterAlternateScreen)?;
+
+        Ok(Screen)
+    }
+}
+
+impl Drop for Screen {
     fn drop(&mut self) {
+        let _ = stdout().execute(LeaveAlternateScreen);
         let _ = disable_raw_mode();
     }
 }
