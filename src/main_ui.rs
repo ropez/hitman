@@ -1,6 +1,12 @@
 #![allow(unused)]
 
-use std::{fmt::Write, fs::read_to_string, io::stdout, path::{Path, PathBuf}, time::Duration};
+use std::{
+    fmt::Write,
+    fs::read_to_string,
+    io::stdout,
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
 use anyhow::{bail, Context, Result};
 use crossterm::{
@@ -17,9 +23,12 @@ use ratatui::{
     Frame, Terminal,
 };
 
-use hitman::env::load_env;
 use hitman::env::{find_available_requests, find_root_dir, select_env};
-use hitman::request::make_request;
+use hitman::request::do_request;
+use hitman::{
+    env::load_env, extract::extract_variables, request::build_client, substitute::substitute,
+};
+use serde_json::Value;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -40,11 +49,13 @@ async fn main() -> Result<()> {
 
     let mut selector = RequestSelector::new(&reqs);
     let mut output = String::new();
+    let mut output_scroll: (u16, u16) = (0, 0);
 
     let mut should_quit = false;
     while !should_quit {
-        terminal.draw(|frame| render_ui(frame, &mut selector, &output))?;
-        should_quit = handle_events(&root_dir, &mut selector, &mut output).await?;
+        terminal.draw(|frame| render_ui(frame, &mut selector, &output, output_scroll))?;
+        should_quit =
+            handle_events(&root_dir, &mut selector, &mut output, &mut output_scroll).await?;
     }
 
     stdout().execute(LeaveAlternateScreen)?;
@@ -52,7 +63,12 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-fn render_ui(frame: &mut Frame, selector: &mut RequestSelector, output: &String) {
+fn render_ui(
+    frame: &mut Frame,
+    selector: &mut RequestSelector,
+    output: &String,
+    output_scroll: (u16, u16),
+) {
     let vert_layout = Layout::new(
         Direction::Vertical,
         [
@@ -76,6 +92,7 @@ fn render_ui(frame: &mut Frame, selector: &mut RequestSelector, output: &String)
 
     frame.render_widget(
         Paragraph::new(output.clone())
+            .scroll(output_scroll)
             .block(Block::default().title("Output").borders(Borders::ALL)),
         main_layout[1],
     );
@@ -85,6 +102,7 @@ async fn handle_events(
     root_dir: &Path,
     selector: &mut RequestSelector,
     output: &mut String,
+    output_scroll: &mut (u16, u16),
 ) -> Result<bool> {
     if event::poll(Duration::from_millis(50))? {
         match event::read()? {
@@ -98,12 +116,49 @@ async fn handle_events(
                 KeyCode::Char('k') => {
                     selector.select_prev();
                 }
+                KeyCode::Char('p') => {
+                    if output_scroll.0 <= 5 {
+                        output_scroll.0 = 0;
+                    } else {
+                        output_scroll.0 -= 5;
+                    }
+                }
+                KeyCode::Char('n') => {
+                    output_scroll.0 += 5;
+                }
                 KeyCode::Enter => match selector.selected_path() {
                     Some(file_path) => {
                         let options = vec![];
                         let path = PathBuf::try_from(file_path)?;
                         let env = load_env(root_dir, &path, &options)?;
-                        make_request(&path, &env).await?;
+
+                        output.clear();
+
+                        let client = build_client()?;
+                        let buf = substitute(&read_to_string(file_path)?, &env)?;
+
+                        for line in buf.lines() {
+                            writeln!(output, "> {}", line);
+                        }
+                        writeln!(output);
+
+                        let (res, elapsed) = do_request(&client, &buf).await?;
+
+                        let mut head = String::new();
+                        for (name, value) in res.headers() {
+                            head.push_str(&format!("{}: {}\n", name, value.to_str()?));
+                        }
+
+                        for line in head.lines() {
+                            writeln!(output, "< {}", line);
+                        }
+                        writeln!(output);
+
+                        if let Ok(json) = res.json::<Value>().await {
+                            writeln!(output, "{}", serde_json::to_string_pretty(&json)?);
+                            // let vars = extract_variables(&json, env)?;
+                            // update_data(&vars)?;
+                        }
                     }
                     None => (),
                 },
