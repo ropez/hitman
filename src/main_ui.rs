@@ -29,7 +29,10 @@ use hitman::{
     env::load_env, extract::extract_variables, request::build_client, substitute::substitute,
 };
 use serde_json::Value;
-use ui::select::{RequestSelector, RequestSelectorState};
+use ui::{
+    output::{OutputView, OutputViewState},
+    select::{RequestSelector, RequestSelectorState},
+};
 
 mod ui;
 
@@ -53,17 +56,12 @@ async fn main() -> Result<()> {
     let mut selector_state = RequestSelectorState::new(&reqs);
     let mut output = String::new();
     let mut output_scroll: (u16, u16) = (0, 0);
+    let mut output_state = OutputViewState::default();
 
     let mut should_quit = false;
     while !should_quit {
-        terminal.draw(|frame| render_ui(frame, &mut selector_state, &output, output_scroll))?;
-        should_quit = handle_events(
-            &root_dir,
-            &mut selector_state,
-            &mut output,
-            &mut output_scroll,
-        )
-        .await?;
+        terminal.draw(|frame| render_ui(frame, &mut selector_state, &mut output_state))?;
+        should_quit = handle_events(&root_dir, &mut selector_state, &mut output_state).await?;
     }
 
     stdout().execute(LeaveAlternateScreen)?;
@@ -74,8 +72,7 @@ async fn main() -> Result<()> {
 fn render_ui(
     frame: &mut Frame,
     selector_state: &mut RequestSelectorState,
-    output: &String,
-    output_scroll: (u16, u16),
+    output_state: &mut OutputViewState,
 ) {
     let vert_layout = Layout::new(
         Direction::Vertical,
@@ -95,19 +92,13 @@ fn render_ui(
 
     frame.render_stateful_widget(RequestSelector::default(), main_layout[0], selector_state);
 
-    frame.render_widget(
-        Paragraph::new(output.clone())
-            .scroll(output_scroll)
-            .block(Block::default().title("Output").borders(Borders::ALL)),
-        main_layout[1],
-    );
+    frame.render_stateful_widget(OutputView::default(), main_layout[1], output_state);
 }
 
 async fn handle_events(
     root_dir: &Path,
     selector_state: &mut RequestSelectorState,
-    output: &mut String,
-    output_scroll: &mut (u16, u16),
+    output_state: &mut OutputViewState,
 ) -> Result<bool> {
     if event::poll(Duration::from_millis(50))? {
         match event::read()? {
@@ -122,14 +113,10 @@ async fn handle_events(
                     selector_state.select_prev();
                 }
                 KeyCode::Char('p') => {
-                    if output_scroll.0 <= 5 {
-                        output_scroll.0 = 0;
-                    } else {
-                        output_scroll.0 -= 5;
-                    }
+                    output_state.scroll_up();
                 }
                 KeyCode::Char('n') => {
-                    output_scroll.0 += 5;
+                    output_state.scroll_down();
                 }
                 KeyCode::Enter => match selector_state.selected_path() {
                     Some(file_path) => {
@@ -137,11 +124,10 @@ async fn handle_events(
                         let path = PathBuf::try_from(file_path)?;
                         let env = load_env(root_dir, &path, &options)?;
 
-                        output.clear();
-
                         let client = build_client()?;
                         let buf = substitute(&read_to_string(file_path)?, &env)?;
 
+                        let mut output = String::new();
                         for line in buf.lines() {
                             writeln!(output, "> {}", line);
                         }
@@ -164,6 +150,8 @@ async fn handle_events(
                             // let vars = extract_variables(&json, env)?;
                             // update_data(&vars)?;
                         }
+
+                        output_state.update(output);
                     }
                     None => (),
                 },
