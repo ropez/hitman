@@ -7,7 +7,13 @@ license = "MIT"
 homepage = "https://github.com/ropez/hitman"
 repository = "https://github.com/ropez/hitman"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[[bin]]
+name = "hitman"
+path = "src/main.rs"
+
+[[bin]]
+name = "hitman-ui"
+path = "src/main_ui.rs"
 
 [dependencies]
 chrono = "0.4.31"
@@ -29,3 +35,5 @@ walkdir = "2"
 notify = "6.1.1"
 spinoff = { version = "0.8.0", features = ["dots"] }
 anyhow = "1.0.78"
+crossterm = "0.27.0"
+ratatui = "0.26.1"

@@ -3,6 +3,7 @@ use inquire::Select;
 use log::warn;
 use reqwest::cookie::CookieStore;
 use reqwest::Url;
+use walkdir::WalkDir;
 use std::env::current_dir;
 use std::fs::{self, read_to_string};
 use std::path::{Path, PathBuf};
@@ -222,6 +223,32 @@ fn read_toml(file_path: &Path) -> Result<TomlTable> {
 
     Ok(cfg)
 }
+
+pub fn find_available_requests(cwd: &Path) -> Result<Vec<PathBuf>> {
+    let files: Vec<_> = WalkDir::new(cwd)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| {
+            e.file_name()
+                .to_str()
+                .map(|s| s.ends_with(".http"))
+                .unwrap_or(false)
+        })
+        .map(|p| {
+            // Convert to relative path, based on depth
+            let components: Vec<_> = p.path().components().collect();
+            let relative_components: Vec<_> = components[(components.len() - p.depth())..]
+                .iter()
+                .map(|c| c.as_os_str())
+                .collect();
+
+            PathBuf::from_iter(&relative_components)
+        })
+        .collect();
+
+    Ok(files)
+}
+
 
 #[cfg(test)]
 mod tests {

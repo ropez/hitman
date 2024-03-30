@@ -4,7 +4,7 @@ use httparse::Status::*;
 use log::{info, log_enabled, warn, Level};
 use reqwest::{Client, Method, Response, Url};
 use serde_json::Value;
-use spinoff::{spinners, Color, Spinner};
+use spinoff::{spinners, Color, Spinner, Streams};
 use std::convert::identity;
 use std::fs::read_to_string;
 use std::path::Path;
@@ -17,7 +17,6 @@ use toml::Table;
 
 use crate::env::{update_data, HitmanCookieJar};
 use crate::extract::extract_variables;
-use crate::logging;
 use crate::substitute::substitute;
 use crate::util::{split_work, truncate, IterExt};
 
@@ -51,7 +50,8 @@ pub async fn flurry_attack(
     let buf = substitute(&read_to_string(file_path)?, env)?;
 
     let t = std::time::Instant::now();
-    let mut spinner = Spinner::new(spinners::BouncingBall, "", Color::Yellow);
+    let mut spinner =
+        Spinner::new_with_stream(spinners::BouncingBall, "", Color::Yellow, Streams::Stderr);
 
     // Run each request in a separate tokio task.
     // It might make it more efficient, if we let each task run a series
@@ -107,12 +107,13 @@ pub async fn make_request(file_path: &Path, env: &Table) -> Result<()> {
 
     let buf = substitute(&read_to_string(file_path)?, env)?;
 
-    logging::clear_screen();
+    clear_screen();
     print_request(&buf);
 
-    let mut spinner = Spinner::new(spinners::BouncingBar, "", Color::Yellow);
+    // let mut spinner =
+    //     Spinner::new_with_stream(spinners::BouncingBar, "", Color::Yellow, Streams::Stderr);
     let (response, elapsed) = do_request(&client, &buf).await?;
-    spinner.stop();
+    // spinner.stop();
 
     print_response(&response)?;
 
@@ -125,6 +126,20 @@ pub async fn make_request(file_path: &Path, env: &Table) -> Result<()> {
     warn!("# Request completed in {:.2?}", elapsed);
 
     Ok(())
+}
+
+fn clear_screen() {
+    if cfg!(windows) {
+        std::process::Command::new("cmd")
+            .args(["/c", "cls"])
+            .spawn()
+            .expect("cls command failed to start")
+            .wait()
+            .expect("failed to wait");
+    } else {
+        // Untested!
+        println!("\x1B[2J");
+    }
 }
 
 async fn do_request(client: &Client, buf: &str) -> Result<(Response, Duration)> {
