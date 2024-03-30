@@ -127,11 +127,11 @@ async fn handle_events(
                         let client = build_client()?;
                         let buf = substitute(&read_to_string(file_path)?, &env)?;
 
-                        let mut output = String::new();
+                        let mut request = String::new();
                         for line in buf.lines() {
-                            writeln!(output, "> {}", line);
+                            writeln!(request, "> {}", line);
                         }
-                        writeln!(output);
+                        writeln!(request);
 
                         let (res, elapsed) = do_request(&client, &buf).await?;
 
@@ -140,18 +140,19 @@ async fn handle_events(
                             head.push_str(&format!("{}: {}\n", name, value.to_str()?));
                         }
 
+                        let mut response = String::new();
                         for line in head.lines() {
-                            writeln!(output, "< {}", line);
+                            writeln!(response, "< {}", line);
                         }
-                        writeln!(output);
+                        writeln!(response);
 
                         if let Ok(json) = res.json::<Value>().await {
-                            writeln!(output, "{}", serde_json::to_string_pretty(&json)?);
+                            writeln!(response, "{}", serde_json::to_string_pretty(&json)?);
                             // let vars = extract_variables(&json, env)?;
                             // update_data(&vars)?;
                         }
 
-                        output_state.update(output);
+                        output_state.update(request, response);
                     }
                     None => (),
                 },

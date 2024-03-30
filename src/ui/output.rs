@@ -1,6 +1,10 @@
+use std::marker::PhantomData;
+
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
+    style::{Color, Style},
+    text::{Line, Text},
     widgets::{Block, Borders, Paragraph, StatefulWidget, Widget},
 };
 
@@ -11,7 +15,15 @@ impl StatefulWidget for OutputView {
     type State = OutputViewState;
 
     fn render(self, area: Rect, buf: &mut Buffer, state: &mut Self::State) {
-        let para = Paragraph::new(state.output.clone())
+        let blue = Style::new().fg(Color::Blue);
+        let req_lines = state.request.lines().map(|line| Line::styled(line, blue));
+
+        let yellow = Style::new().fg(Color::Yellow);
+        let res_lines = state.response.lines().map(|line| Line::styled(line, yellow));
+
+        let lines: Vec<Line> = req_lines.chain(res_lines).collect();
+
+        let para = Paragraph::new(Text::from(lines))
             .scroll(state.scroll)
             .block(Block::default().title("Output").borders(Borders::ALL));
 
@@ -20,23 +32,26 @@ impl StatefulWidget for OutputView {
 }
 
 pub struct OutputViewState {
-    output: String,
+    request: String,
+    response: String,
     scroll: (u16, u16),
 }
 
-impl Default for OutputViewState {
+impl<'a> Default for OutputViewState {
     fn default() -> Self {
         Self {
-            output: String::new(),
+            request: String::default(),
+            response: String::default(),
             scroll: (0, 0),
         }
     }
 }
 
 impl OutputViewState {
-    pub fn update(&mut self, output: String) {
+    pub fn update(&mut self, request: String, response: String) {
         self.scroll = (0, 0);
-        self.output = output;
+        self.request = request;
+        self.response = response;
     }
 
     pub fn scroll_up(&mut self) {
