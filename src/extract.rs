@@ -2,7 +2,7 @@ use anyhow::{anyhow, bail, Result};
 use log::info;
 use toml::{Table, Value};
 
-use super::util::truncate;
+use crate::util::truncate;
 use jsonpath::Selector;
 use serde_json::Value as JsonValue;
 
@@ -114,8 +114,8 @@ mod tests {
         .unwrap();
 
         let data = serde_json::from_str(
-            r#"{ 
-            "Data": { "Token": "kokobaba1234" } 
+            r#"{
+            "Data": { "Token": "kokobaba1234" }
         }"#,
         )
         .unwrap();
@@ -143,7 +143,7 @@ mod tests {
         .unwrap();
 
         let data = serde_json::from_str(
-            r#"{ 
+            r#"{
             "Tools": [
                 { "Name": "First tool", "ToolId": 123 },
                 { "Name": "Second tool", "ToolId": 345 }

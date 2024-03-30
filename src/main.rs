@@ -2,26 +2,20 @@ use anyhow::{Context, Result};
 use inquire::{list_option::ListOption, Select};
 use log::{error, info};
 use notify::EventKind;
-use request::{flurry_attack, make_request};
 use std::env::current_dir;
 use std::path::Path;
 use tokio::sync::mpsc;
 
-mod cli;
-mod env;
-mod logging;
-mod request;
-mod util;
-mod watcher;
-use env::{find_available_requests, find_root_dir, load_env, select_env};
+use hitman::request::make_request;
+use hitman::flurry::flurry_attack;
+use hitman::env::{find_available_requests, find_root_dir, load_env, select_env, watch_list};
+use hitman::prompt::{fuzzy_match, set_interactive_mode};
+
 use watcher::Watcher;
 
-mod extract;
-
-mod substitute;
-
-mod prompt;
-use prompt::set_interactive_mode;
+mod cli;
+mod logging;
+mod watcher;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -72,7 +66,7 @@ async fn main() -> Result<()> {
 
             eprintln!();
             let selected = Select::new("Select request", options)
-                .with_filter(&|filter, _, value, _| prompt::fuzzy_match(filter, value))
+                .with_filter(&|filter, _, value, _| fuzzy_match(filter, value))
                 .with_page_size(15)
                 .prompt()?;
 
@@ -124,7 +118,7 @@ async fn run_once(root_dir: &Path, file_path: &Path, options: &[(String, String)
 async fn watch_mode(root_dir: &Path, file_path: &Path, options: &[(String, String)]) -> Result<()> {
     let (tx, mut rx) = mpsc::channel(1);
 
-    let paths = env::watch_list(root_dir, file_path);
+    let paths = watch_list(root_dir, file_path);
     let mut watcher = Watcher::new(tx, paths)?;
 
     watcher.watch_all()?;

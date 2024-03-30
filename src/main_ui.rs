@@ -17,17 +17,9 @@ use ratatui::{
     Frame, Terminal,
 };
 
-use env::load_env;
-use env::{find_available_requests, find_root_dir, select_env};
-use request::make_request;
-
-mod env;
-mod prompt;
-mod request;
-mod substitute;
-mod extract;
-mod util;
-mod logging;
+use hitman::env::load_env;
+use hitman::env::{find_available_requests, find_root_dir, select_env};
+use hitman::request::make_request;
 
 #[tokio::main]
 async fn main() -> Result<()> {
