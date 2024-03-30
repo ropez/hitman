@@ -4,9 +4,8 @@ use log::{error, info};
 use notify::EventKind;
 use request::{flurry_attack, make_request};
 use std::env::current_dir;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use tokio::sync::mpsc;
-use walkdir::WalkDir;
 
 mod cli;
 mod env;
@@ -14,7 +13,7 @@ mod logging;
 mod request;
 mod util;
 mod watcher;
-use env::{find_root_dir, load_env, select_env};
+use env::{find_available_requests, find_root_dir, load_env, select_env};
 use watcher::Watcher;
 
 mod extract;
@@ -114,31 +113,6 @@ fn is_user_cancelation(err: &anyhow::Error) -> bool {
     false
         || matches!(err.downcast_ref(), Some(OperationCanceled))
         || matches!(err.downcast_ref(), Some(OperationInterrupted))
-}
-
-fn find_available_requests(cwd: &Path) -> Result<Vec<PathBuf>> {
-    let files: Vec<_> = WalkDir::new(cwd)
-        .into_iter()
-        .filter_map(|e| e.ok())
-        .filter(|e| {
-            e.file_name()
-                .to_str()
-                .map(|s| s.ends_with(".http"))
-                .unwrap_or(false)
-        })
-        .map(|p| {
-            // Convert to relative path, based on depth
-            let components: Vec<_> = p.path().components().collect();
-            let relative_components: Vec<_> = components[(components.len() - p.depth())..]
-                .iter()
-                .map(|c| c.as_os_str())
-                .collect();
-
-            PathBuf::from_iter(&relative_components)
-        })
-        .collect();
-
-    Ok(files)
 }
 
 async fn run_once(root_dir: &Path, file_path: &Path, options: &[(String, String)]) -> Result<()> {
