@@ -3,7 +3,7 @@ use std::marker::PhantomData;
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
-    style::{Color, Style},
+    style::{Style, Stylize},
     text::{Line, Text},
     widgets::{Block, Borders, Paragraph, StatefulWidget, Widget},
 };
@@ -15,10 +15,10 @@ impl StatefulWidget for OutputView {
     type State = OutputViewState;
 
     fn render(self, area: Rect, buf: &mut Buffer, state: &mut Self::State) {
-        let blue = Style::new().fg(Color::Blue);
+        let blue = Style::new().blue();
         let req_lines = state.request.lines().map(|line| Line::styled(line, blue));
 
-        let yellow = Style::new().fg(Color::Yellow);
+        let yellow = Style::new().yellow();
         let res_lines = state.response.lines().map(|line| Line::styled(line, yellow));
 
         let lines: Vec<Line> = req_lines.chain(res_lines).collect();
@@ -37,7 +37,7 @@ pub struct OutputViewState {
     scroll: (u16, u16),
 }
 
-impl<'a> Default for OutputViewState {
+impl Default for OutputViewState {
     fn default() -> Self {
         Self {
             request: String::default(),

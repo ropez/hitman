@@ -1,8 +1,11 @@
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
-    style::{Modifier, Style},
-    widgets::{Block, Borders, HighlightSpacing, List, ListState, StatefulWidget},
+    style::{Modifier, Style, Stylize},
+    text::Text,
+    widgets::{
+        Block, BorderType, Borders, HighlightSpacing, List, ListState, Paragraph, StatefulWidget,
+    },
     Frame,
 };
 
@@ -13,19 +16,30 @@ impl StatefulWidget for RequestSelector {
     type State = RequestSelectorState;
 
     fn render(self, area: Rect, buf: &mut Buffer, state: &mut Self::State) {
-        let list = List::new(state.items.clone())
-            .block(Block::default().title("Requests").borders(Borders::ALL))
+        let list = List::new(state.get_items())
+            .block(Block::bordered().title("Requests"))
             .highlight_style(Style::new().add_modifier(Modifier::REVERSED))
             .highlight_symbol(">> ")
             .highlight_spacing(HighlightSpacing::Always);
 
         list.render(area, buf, &mut state.list_state);
+
+        // XXX Search "inlay"
+        let rect = Rect::new(
+            area.x + area.width - 20,
+            area.y + area.height - 2,
+            20 - 1,
+            1,
+        );
+        let s = Paragraph::new(state.search.clone()).style(Style::new().cyan());
+        ratatui::widgets::Widget::render(s, rect, buf);
     }
 }
 
 pub struct RequestSelectorState {
     items: Vec<String>,
     list_state: ListState,
+    search: String,
 }
 
 impl RequestSelectorState {
@@ -33,6 +47,7 @@ impl RequestSelectorState {
         Self {
             items: reqs.into_iter().map(|a| String::from(a)).collect(),
             list_state: ListState::default().with_selected(Some(0)),
+            search: String::new(),
         }
     }
 
@@ -57,5 +72,21 @@ impl RequestSelectorState {
             Some(i) => self.items.get(i),
             None => None,
         }
+    }
+
+    pub fn get_items(&self) -> Vec<String> {
+        if self.search.is_empty() {
+            self.items.clone()
+        } else {
+            self.items.clone().into_iter().filter(|s| s.contains(&self.search)).collect()
+        }
+    }
+
+    pub fn input(&mut self, ch: char) {
+        self.search.push(ch);
+    }
+
+    pub fn clear_search(&mut self) {
+        self.search.clear();
     }
 }

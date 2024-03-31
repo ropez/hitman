@@ -16,10 +16,13 @@ use crossterm::{
 };
 use ratatui::{
     backend::CrosstermBackend,
-    layout::{Constraint, Direction, Layout, Rect},
-    style::{Modifier, Style},
+    layout::{Constraint, Direction, Layout, Margin, Rect},
+    style::{Modifier, Style, Stylize},
     text::Text,
-    widgets::{self, Block, Borders, HighlightSpacing, List, ListState, Paragraph},
+    widgets::{
+        self, Block, BorderType, Borders, Clear, HighlightSpacing, List, ListState, Padding,
+        Paragraph,
+    },
     Frame, Terminal,
 };
 use serde_json::Value;
@@ -60,7 +63,6 @@ fn render_ui(frame: &mut Frame, state: &mut State) {
     let vert_layout = Layout::new(
         Direction::Vertical,
         [
-            // Constraint::Length(1),
             Constraint::Min(0),
             Constraint::Length(1),
         ],
@@ -84,6 +86,26 @@ fn render_ui(frame: &mut Frame, state: &mut State) {
         main_layout[1],
         &mut state.output_state,
     );
+
+    frame.render_widget(
+        Paragraph::new("S: Select environment").style(Style::new().dark_gray()),
+        vert_layout[1],
+    );
+
+    if let Some(st) = state.environment_state {
+        let area = frame.size().inner(&Margin::new(42, 10));
+        frame.render_widget(Clear, area);
+        frame.render_widget(
+            List::new(["Local", "Remote", "Prod"])
+                .block(
+                    Block::bordered()
+                        .title("Select environment")
+                        .border_type(BorderType::Rounded),
+                )
+                .style(Style::new().white().on_blue()),
+            area,
+        );
+    }
 }
 
 async fn handle_events(root_dir: &Path, state: &mut State) -> Result<bool> {
@@ -104,6 +126,15 @@ async fn handle_events(root_dir: &Path, state: &mut State) -> Result<bool> {
                 }
                 KeyCode::Char('n') => {
                     state.output_state.scroll_down();
+                }
+                KeyCode::Char('s') => {
+                    state.environment_state = Some(true);
+                }
+                KeyCode::Char(ch) => {
+                    state.selector_state.input(ch);
+                }
+                KeyCode::Esc | KeyCode::Backspace => {
+                    state.selector_state.clear_search();
                 }
                 KeyCode::Enter => match state.selector_state.selected_path() {
                     Some(file_path) => {
@@ -154,6 +185,7 @@ async fn handle_events(root_dir: &Path, state: &mut State) -> Result<bool> {
 struct State {
     selector_state: RequestSelectorState,
     output_state: OutputViewState,
+    environment_state: Option<bool>,
 }
 
 impl State {
@@ -171,6 +203,7 @@ impl State {
         Ok(Self {
             selector_state,
             output_state,
+            environment_state: None,
         })
     }
 }
