@@ -1,4 +1,9 @@
-use std::{fmt::Write, fs::read_to_string, path::PathBuf, time::Duration};
+use std::{
+    fmt::Write,
+    fs::read_to_string,
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
 use anyhow::{Context, Result};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
@@ -149,48 +154,12 @@ impl App {
                             KeyCode::Esc | KeyCode::Backspace => {
                                 self.selector_state.clear_search();
                             }
-                            KeyCode::Enter => match self.selector_state.selected_path() {
-                                Some(file_path) => {
-                                    let options = vec![];
+                            KeyCode::Enter => {
+                                if let Some(file_path) = self.selector_state.selected_path() {
                                     let path = PathBuf::try_from(file_path)?;
-                                    let env = load_env(&self.root_dir, &path, &options)?;
-
-                                    let client = build_client()?;
-                                    let buf = substitute(&read_to_string(file_path)?, &env)?;
-
-                                    let mut request = String::new();
-                                    for line in buf.lines() {
-                                        writeln!(request, "> {}", line)?;
-                                    }
-                                    writeln!(request)?;
-
-                                    let (res, elapsed) = do_request(&client, &buf).await?;
-
-                                    let mut head = String::new();
-                                    for (name, value) in res.headers() {
-                                        head.push_str(&format!("{}: {}\n", name, value.to_str()?));
-                                    }
-
-                                    let mut response = String::new();
-                                    for line in head.lines() {
-                                        writeln!(response, "< {}", line)?;
-                                    }
-                                    writeln!(response)?;
-
-                                    if let Ok(json) = res.json::<Value>().await {
-                                        writeln!(
-                                            response,
-                                            "{}",
-                                            serde_json::to_string_pretty(&json)?
-                                        )?;
-                                        // let vars = extract_variables(&json, env)?;
-                                        // update_data(&vars)?;
-                                    }
-
-                                    self.output_state.update(request, response);
+                                    self.make_request(&path).await?;
                                 }
-                                None => (),
-                            },
+                            }
                             _ => (),
                         }
                     }
@@ -199,5 +168,42 @@ impl App {
             }
         }
         Ok(false)
+    }
+
+    async fn make_request(&mut self, path: &Path) -> Result<()> {
+        let options = vec![];
+        let env = load_env(&self.root_dir, path, &options)?;
+
+        let client = build_client()?;
+        let buf = substitute(&read_to_string(path)?, &env)?;
+
+        let mut request = String::new();
+        for line in buf.lines() {
+            writeln!(request, "> {}", line)?;
+        }
+        writeln!(request)?;
+
+        let (res, elapsed) = do_request(&client, &buf).await?;
+
+        let mut head = String::new();
+        for (name, value) in res.headers() {
+            head.push_str(&format!("{}: {}\n", name, value.to_str()?));
+        }
+
+        let mut response = String::new();
+        for line in head.lines() {
+            writeln!(response, "< {}", line)?;
+        }
+        writeln!(response)?;
+
+        if let Ok(json) = res.json::<Value>().await {
+            writeln!(response, "{}", serde_json::to_string_pretty(&json)?)?;
+            // let vars = extract_variables(&json, env)?;
+            // update_data(&vars)?;
+        }
+
+        self.output_state.update(request, response);
+
+        Ok(())
     }
 }
