@@ -10,7 +10,7 @@ use std::{
 
 use anyhow::{bail, Context, Result};
 use crossterm::{
-    event::{self, Event, KeyCode, KeyEventKind},
+    event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
     ExecutableCommand,
 };
@@ -62,10 +62,7 @@ async fn main() -> Result<()> {
 fn render_ui(frame: &mut Frame, state: &mut State) {
     let vert_layout = Layout::new(
         Direction::Vertical,
-        [
-            Constraint::Min(0),
-            Constraint::Length(1),
-        ],
+        [Constraint::Min(0), Constraint::Length(1)],
     )
     .split(frame.size());
 
@@ -111,71 +108,85 @@ fn render_ui(frame: &mut Frame, state: &mut State) {
 async fn handle_events(root_dir: &Path, state: &mut State) -> Result<bool> {
     if event::poll(Duration::from_millis(50))? {
         match event::read()? {
-            Event::Key(key) if key.kind == KeyEventKind::Press => match key.code {
-                KeyCode::Char('q') => {
-                    return Ok(true);
-                }
-                KeyCode::Char('j') => {
-                    state.selector_state.select_next();
-                }
-                KeyCode::Char('k') => {
-                    state.selector_state.select_prev();
-                }
-                KeyCode::Char('p') => {
-                    state.output_state.scroll_up();
-                }
-                KeyCode::Char('n') => {
-                    state.output_state.scroll_down();
-                }
-                KeyCode::Char('s') => {
-                    state.environment_state = Some(true);
-                }
-                KeyCode::Char(ch) => {
-                    state.selector_state.input(ch);
-                }
-                KeyCode::Esc | KeyCode::Backspace => {
-                    state.selector_state.clear_search();
-                }
-                KeyCode::Enter => match state.selector_state.selected_path() {
-                    Some(file_path) => {
-                        let options = vec![];
-                        let path = PathBuf::try_from(file_path)?;
-                        let env = load_env(root_dir, &path, &options)?;
-
-                        let client = build_client()?;
-                        let buf = substitute(&read_to_string(file_path)?, &env)?;
-
-                        let mut request = String::new();
-                        for line in buf.lines() {
-                            writeln!(request, "> {}", line);
+            Event::Key(key) if key.kind == KeyEventKind::Press => {
+                if key.modifiers.contains(KeyModifiers::CONTROL) {
+                    match key.code {
+                        KeyCode::Char('c') | KeyCode::Char('q') => {
+                            return Ok(true);
                         }
-                        writeln!(request);
-
-                        let (res, elapsed) = do_request(&client, &buf).await?;
-
-                        let mut head = String::new();
-                        for (name, value) in res.headers() {
-                            head.push_str(&format!("{}: {}\n", name, value.to_str()?));
+                        KeyCode::Char('j') => {
+                            state.selector_state.select_next();
                         }
-
-                        let mut response = String::new();
-                        for line in head.lines() {
-                            writeln!(response, "< {}", line);
+                        KeyCode::Char('k') => {
+                            state.selector_state.select_prev();
                         }
-                        writeln!(response);
-
-                        if let Ok(json) = res.json::<Value>().await {
-                            writeln!(response, "{}", serde_json::to_string_pretty(&json)?);
-                            // let vars = extract_variables(&json, env)?;
-                            // update_data(&vars)?;
+                        KeyCode::Char('p') => {
+                            state.output_state.scroll_up();
                         }
-
-                        state.output_state.update(request, response);
+                        KeyCode::Char('n') => {
+                            state.output_state.scroll_down();
+                        }
+                        KeyCode::Char('s') => {
+                            state.environment_state = Some(true);
+                        }
+                        _ => (),
                     }
-                    None => (),
-                },
-                _ => (),
-            },
+                } else {
+                    match key.code {
+                        KeyCode::Down => {
+                            state.selector_state.select_next();
+                        }
+                        KeyCode::Up => {
+                            state.selector_state.select_prev();
+                        }
+                        KeyCode::Char(ch) => {
+                            state.selector_state.input(ch);
+                        }
+                        KeyCode::Esc | KeyCode::Backspace => {
+                            state.selector_state.clear_search();
+                        }
+                        KeyCode::Enter => match state.selector_state.selected_path() {
+                            Some(file_path) => {
+                                let options = vec![];
+                                let path = PathBuf::try_from(file_path)?;
+                                let env = load_env(root_dir, &path, &options)?;
+
+                                let client = build_client()?;
+                                let buf = substitute(&read_to_string(file_path)?, &env)?;
+
+                                let mut request = String::new();
+                                for line in buf.lines() {
+                                    writeln!(request, "> {}", line);
+                                }
+                                writeln!(request);
+
+                                let (res, elapsed) = do_request(&client, &buf).await?;
+
+                                let mut head = String::new();
+                                for (name, value) in res.headers() {
+                                    head.push_str(&format!("{}: {}\n", name, value.to_str()?));
+                                }
+
+                                let mut response = String::new();
+                                for line in head.lines() {
+                                    writeln!(response, "< {}", line);
+                                }
+                                writeln!(response);
+
+                                if let Ok(json) = res.json::<Value>().await {
+                                    writeln!(response, "{}", serde_json::to_string_pretty(&json)?);
+                                    // let vars = extract_variables(&json, env)?;
+                                    // update_data(&vars)?;
+                                }
+
+                                state.output_state.update(request, response);
+                            }
+                            None => (),
+                        },
+                        _ => (),
+                    }
+                }
+            }
             _ => (),
         }
     }
