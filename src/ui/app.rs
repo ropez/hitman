@@ -12,13 +12,16 @@ use ratatui::{
     buffer::Buffer,
     layout::{Constraint, Direction, Layout, Margin, Rect},
     style::{Style, Stylize},
-    widgets::{Block, BorderType, Clear, List, Paragraph, StatefulWidget, Widget},
+    symbols,
+    text::{Line, Span},
+    widgets::{Block, BorderType, Borders, Clear, List, Paragraph, StatefulWidget, Widget},
     Terminal,
 };
 use serde_json::Value;
 
 use hitman::{
-    env::{find_available_requests, find_root_dir, load_env},
+    env::{find_available_requests, find_root_dir, load_env, update_data},
+    extract::extract_variables,
     request::{build_client, do_request},
     substitute::substitute,
 };
@@ -33,6 +36,7 @@ pub struct App {
     selector_state: RequestSelectorState,
     output_state: OutputViewState,
     environment_state: Option<bool>,
+    search: String,
 }
 
 impl App {
@@ -54,6 +58,7 @@ impl App {
             selector_state,
             output_state,
             environment_state: None,
+            search: String::new(),
         })
     }
 
@@ -63,7 +68,15 @@ impl App {
     {
         let mut should_quit = false;
         while !should_quit {
-            terminal.draw(|frame| self.render(frame.size(), frame.buffer_mut()))?;
+            terminal.draw(|frame| {
+                self.render(frame.size(), frame.buffer_mut());
+
+                // XXX Coupling
+                frame.set_cursor(
+                    frame.size().x + 11 + self.search.len() as u16,
+                    frame.size().y + frame.size().height - 3,
+                );
+            })?;
             should_quit = self.handle_events().await?;
         }
 
@@ -85,12 +98,48 @@ impl App {
     fn render_main(&mut self, area: Rect, buf: &mut Buffer) {
         let layout = Layout::new(
             Direction::Horizontal,
-            [Constraint::Max(40), Constraint::Min(1)],
+            [Constraint::Max(60), Constraint::Min(1)],
         )
         .split(area);
 
-        RequestSelector::default().render(layout[0], buf, &mut self.selector_state);
-        OutputView::default().render(layout[1], buf, &mut self.output_state);
+        self.render_left(layout[0], buf);
+
+        StatefulWidget::render(
+            OutputView::default(),
+            layout[1],
+            buf,
+            &mut self.output_state,
+        );
+    }
+
+    fn render_left(&mut self, area: Rect, buf: &mut Buffer) {
+        let layout = Layout::new(
+            Direction::Vertical,
+            [Constraint::Min(0), Constraint::Max(3)],
+        )
+        .split(area);
+
+        // XXX Consider passing items to widget instance, instead of using state
+        StatefulWidget::render(
+            RequestSelector::new(&self.search),
+            layout[0],
+            buf,
+            &mut self.selector_state,
+        );
+
+        Widget::render(
+            Paragraph::new(Line::from(vec![
+                Span::from("  Search: "),
+                Span::from(self.search.clone()).yellow(),
+            ]))
+            .block(Block::bordered().border_set(symbols::border::Set {
+                top_left: symbols::border::PLAIN.vertical_right,
+                top_right: symbols::border::PLAIN.vertical_left,
+                ..symbols::border::PLAIN
+            })),
+            layout[1],
+            buf,
+        );
     }
 
     fn render_status(&mut self, area: Rect, buf: &mut Buffer) {
@@ -99,7 +148,7 @@ impl App {
     }
 
     fn render_popup(&mut self, area: Rect, buf: &mut Buffer) {
-        if let Some(st) = self.environment_state {
+        if let Some(_state) = self.environment_state {
             let list = List::new(["Local", "Remote", "Prod"])
                 .block(
                     Block::bordered()
@@ -109,7 +158,7 @@ impl App {
                 .style(Style::new().white().on_blue());
 
             let inner_area = area.inner(&Margin::new(42, 10));
-            Clear.render(inner_area, buf);
+            Widget::render(Clear, inner_area, buf);
             Widget::render(list, inner_area, buf);
         }
     }
@@ -135,6 +184,9 @@ impl App {
                             KeyCode::Char('n') => {
                                 self.output_state.scroll_down();
                             }
+                            KeyCode::Char('w') => {
+                                self.search.clear();
+                            }
                             KeyCode::Char('s') => {
                                 self.environment_state = Some(true);
                             }
@@ -149,10 +201,16 @@ impl App {
                                 self.selector_state.select_prev();
                             }
                             KeyCode::Char(ch) => {
-                                self.selector_state.input(ch);
+                                if self.search.len() < 24 {
+                                    self.search.push(ch);
+                                    self.selector_state.select_first();
+                                }
                             }
-                            KeyCode::Esc | KeyCode::Backspace => {
-                                self.selector_state.clear_search();
+                            KeyCode::Backspace => {
+                                self.search.pop();
+                            }
+                            KeyCode::Esc => {
+                                self.search.clear();
                             }
                             KeyCode::Enter => {
                                 if let Some(file_path) = self.selector_state.selected_path() {
@@ -183,23 +241,18 @@ impl App {
         }
         writeln!(request)?;
 
-        let (res, elapsed) = do_request(&client, &buf).await?;
-
-        let mut head = String::new();
-        for (name, value) in res.headers() {
-            head.push_str(&format!("{}: {}\n", name, value.to_str()?));
-        }
+        let (res, _elapsed) = do_request(&client, &buf).await?;
 
         let mut response = String::new();
-        for line in head.lines() {
-            writeln!(response, "< {}", line)?;
+        for (name, value) in res.headers() {
+            writeln!(response, "< {}: {}", name, value.to_str()?)?;
         }
         writeln!(response)?;
 
         if let Ok(json) = res.json::<Value>().await {
             writeln!(response, "{}", serde_json::to_string_pretty(&json)?)?;
-            // let vars = extract_variables(&json, env)?;
-            // update_data(&vars)?;
+            let vars = extract_variables(&json, &env)?;
+            update_data(&vars)?;
         }
 
         self.output_state.update(request, response);
