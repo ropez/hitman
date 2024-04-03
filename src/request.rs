@@ -13,6 +13,7 @@ use toml::Table;
 
 use crate::env::{update_data, HitmanCookieJar};
 use crate::extract::extract_variables;
+use crate::prompt::get_interaction;
 use crate::substitute::substitute;
 use crate::util::truncate;
 
@@ -29,7 +30,9 @@ pub fn build_client() -> Result<Client> {
 pub async fn make_request(file_path: &Path, env: &Table) -> Result<()> {
     let client = build_client()?;
 
-    let buf = substitute(&read_to_string(file_path)?, env)?;
+    let interaction = get_interaction();
+
+    let buf = substitute(&read_to_string(file_path)?, env, interaction.as_ref())?;
 
     clear_screen();
     print_request(&buf);

@@ -3,6 +3,7 @@ pub mod env;
 pub mod request;
 pub mod flurry;
 pub mod substitute;
+pub mod interaction;
 pub mod extract;
 
 pub mod prompt;
