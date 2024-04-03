@@ -1,6 +1,4 @@
-use crate::prompt::{fuzzy_match, is_interactive_mode};
 use anyhow::{bail, Result};
-use inquire::{list_option::ListOption, DateSelect, Select, Text};
 use std::str;
 use thiserror::Error;
 use toml::{Table, Value};
@@ -20,18 +18,27 @@ pub enum SubstituteError {
     TypeNotSupported,
 }
 
-pub fn substitute(input: &str, env: &Table) -> Result<String> {
+pub trait UserInteraction {
+    fn prompt(&self, key: &str, fallback: Option<&str>) -> Result<String>;
+    fn select(&self, key: &str, values: &[Value]) -> Result<String>;
+}
+
+pub fn substitute<I>(input: &str, env: &Table, interaction: &I) -> Result<String>
+where I: UserInteraction + ?Sized
+{
     let mut output = String::new();
 
     for line in input.lines() {
-        output.push_str(&substitute_line(line, env)?);
+        output.push_str(&substitute_line(line, env, interaction)?);
         output.push('\n');
     }
 
     Ok(output)
 }
 
-fn substitute_line(line: &str, env: &Table) -> Result<String> {
+fn substitute_line<I>(line: &str, env: &Table, interaction: &I) -> Result<String>
+where I: UserInteraction + ?Sized
+{
     let mut output = String::new();
     let mut slice = line;
     loop {
@@ -51,10 +58,10 @@ fn substitute_line(line: &str, env: &Table) -> Result<String> {
                     bail!(SubstituteError::SyntaxError);
                 };
 
-                let rep = find_replacement(&slice[2..end - 2], env)?;
+                let rep = find_replacement(&slice[2..end - 2], env, interaction)?;
 
                 // Nested substitution
-                let rep = substitute_line(&rep, env)?;
+                let rep = substitute_line(&rep, env, interaction)?;
                 output.push_str(&rep);
 
                 slice = &slice[end..];
@@ -70,7 +77,9 @@ fn valid_character(c: &char) -> bool {
     c.is_ascii_alphabetic() || c.is_ascii_digit() || *c == '_'
 }
 
-fn find_replacement(placeholder: &str, env: &Table) -> Result<String> {
+fn find_replacement<I>(placeholder: &str, env: &Table, interaction: &I) -> Result<String>
+where I: UserInteraction + ?Sized
+{
     let mut parts = placeholder.split('|');
 
     let key = parts.next().unwrap_or("").trim();
@@ -84,99 +93,15 @@ fn find_replacement(placeholder: &str, env: &Table) -> Result<String> {
         Some(Value::Float(v)) => Ok(parse(&v.to_string())),
         Some(Value::Boolean(v)) => Ok(parse(&v.to_string())),
         Some(Value::Array(arr)) => {
-            if is_interactive_mode() {
-                Ok(select_replacement(&parsed_key, arr)?)
-            } else {
-                let suggestions: Vec<String> = arr
-                    .iter()
-                    .take(10)
-                    .filter_map(|v| match (v.get("value"), v.get("name")) {
-                        (Some(v), Some(n)) => Some(format!("{key}={v} => {n}")),
-                        _ => None,
-                    })
-                    .collect();
-                let suggestions = suggestions.join("\n");
-                bail!(SubstituteError::ReplacementNotSelected {
-                    key: parsed_key,
-                    suggestions
-                })
-            }
+            interaction.select(&parsed_key, arr)
         }
         Some(_) => bail!(SubstituteError::TypeNotSupported),
         None => {
             let fallback = parts.next().map(|fb| fb.trim());
 
-            if is_interactive_mode() {
-                prompt_user(&parsed_key, fallback)
-            } else {
-                fallback
-                    .map(|f| f.to_string())
-                    .ok_or(SubstituteError::ReplacementNotFound { key: parsed_key }.into())
-            }
+            interaction.prompt(&parsed_key, fallback)
         }
     }
-}
-
-fn select_replacement(key: &str, values: &[Value]) -> Result<String> {
-    let list_options: Vec<ListOption<String>> = values
-        .iter()
-        .enumerate()
-        .map(|(i, v)| {
-            ListOption::new(
-                i,
-                match v {
-                    Value::Table(t) => match t.get("name") {
-                        Some(Value::String(value)) => value.clone(),
-                        Some(value) => value.to_string(),
-                        None => t.to_string(),
-                    },
-                    other => other.to_string(),
-                },
-            )
-        })
-        .collect();
-
-    let selected = Select::new(&format!("Select value for {}", key), list_options.clone())
-        .with_filter(&|filter, _, value, _| fuzzy_match(filter, value))
-        .with_page_size(15)
-        .prompt()?;
-
-    match &values[selected.index] {
-        Value::Table(t) => match t.get("value") {
-            Some(Value::String(value)) => Ok(value.clone()),
-            Some(value) => Ok(value.to_string()),
-            _ => bail!(SubstituteError::ReplacementNotFound { key: key.into() }),
-        },
-        other => Ok(other.to_string()),
-    }
-}
-
-fn prompt_user(key: &str, fallback: Option<&str>) -> Result<String> {
-    let fb = fallback.unwrap_or("");
-
-    if key.ends_with("_date") || key.ends_with("Date") {
-        if let Some(date) = prompt_for_date(key)? {
-            return Ok(date);
-        }
-    }
-
-    let input = Text::new(&format!("Enter value for {}", key))
-        .with_default(fb)
-        .prompt()?;
-
-    Ok(input)
-}
-
-fn prompt_for_date(key: &str) -> Result<Option<String>> {
-    let msg = format!("Select a date for {}", key);
-    let formatter = |date: chrono::NaiveDate| date.format("%Y-%m-%d").to_string();
-
-    let res = DateSelect::new(&msg)
-        .with_week_start(chrono::Weekday::Mon)
-        .with_formatter(&formatter)
-        .prompt_skippable()?;
-
-    Ok(res.map(formatter))
 }
 
 #[cfg(test)]

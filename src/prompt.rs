@@ -1,5 +1,7 @@
 use std::env;
 
+use crate::{substitute::UserInteraction, interaction::{CliUserInteraction, NoUserInteraction}};
+
 fn set_boolean(name: &str, value: bool) {
     env::set_var(name, if value { "y" } else { "n" });
 }
@@ -36,6 +38,14 @@ pub fn fuzzy_match(filter: &str, value: &str) -> bool {
     }
 
     true
+}
+
+pub fn get_interaction() -> Box<dyn UserInteraction> {
+    if is_interactive_mode() {
+        Box::new(CliUserInteraction)
+    } else {
+        Box::new(NoUserInteraction)
+    }
 }
 
 #[cfg(test)]

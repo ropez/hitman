@@ -14,7 +14,7 @@ use ratatui::{
     style::{Style, Stylize},
     symbols,
     text::{Line, Span},
-    widgets::{Block, BorderType, Borders, Clear, List, Paragraph, StatefulWidget, Widget},
+    widgets::{Block, BorderType, Clear, List, Paragraph, StatefulWidget, Widget},
     Terminal,
 };
 use serde_json::Value;
@@ -23,12 +23,12 @@ use hitman::{
     env::{find_available_requests, find_root_dir, load_env, update_data},
     extract::extract_variables,
     request::{build_client, do_request},
-    substitute::substitute,
+    substitute::{substitute},
 };
 
 use super::{
     output::{OutputView, OutputViewState},
-    select::{RequestSelector, RequestSelectorState},
+    select::{RequestSelector, RequestSelectorState}, interaction::UiUserInteraction,
 };
 
 pub struct App {
@@ -233,7 +233,7 @@ impl App {
         let env = load_env(&self.root_dir, path, &options)?;
 
         let client = build_client()?;
-        let buf = substitute(&read_to_string(path)?, &env)?;
+        let buf = substitute(&read_to_string(path)?, &env, &UiUserInteraction)?;
 
         let mut request = String::new();
         for line in buf.lines() {
