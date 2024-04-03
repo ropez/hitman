@@ -1,15 +1,17 @@
-use crate::{substitute::{SubstituteError, UserInteraction}, prompt::fuzzy_match};
+use crate::{prompt::fuzzy_match, substitute::UserInteraction};
 use anyhow::{bail, Result};
-use inquire::{DateSelect, Text, list_option::ListOption, Select};
+use inquire::{list_option::ListOption, DateSelect, Select, Text};
 use toml::Value;
 
 pub struct NoUserInteraction;
 
 impl UserInteraction for NoUserInteraction {
     fn prompt(&self, key: &str, fallback: Option<&str>) -> Result<String> {
-        fallback
-            .map(|f| f.to_string())
-            .ok_or(SubstituteError::ReplacementNotFound { key: key.into() }.into())
+        if let Some(val) = fallback.map(|f| f.to_string()) {
+            return Ok(val);
+        }
+
+        bail!("Replacement not found: {key}");
     }
 
     fn select(&self, key: &str, values: &[toml::Value]) -> Result<String> {
@@ -22,10 +24,8 @@ impl UserInteraction for NoUserInteraction {
             })
             .collect();
         let suggestions = suggestions.join("\n");
-        bail!(SubstituteError::ReplacementNotSelected {
-            key: key.into(),
-            suggestions
-        })
+
+        bail!("Replacement not selected: {key}\nSuggestions:\n{suggestions}");
     }
 }
 
@@ -97,7 +97,7 @@ fn select_replacement(key: &str, values: &[Value]) -> Result<String> {
         Value::Table(t) => match t.get("value") {
             Some(Value::String(value)) => Ok(value.clone()),
             Some(value) => Ok(value.to_string()),
-            _ => bail!(SubstituteError::ReplacementNotFound { key: key.into() }),
+            _ => bail!("Replacement not found: {key}"),
         },
         other => Ok(other.to_string()),
     }
