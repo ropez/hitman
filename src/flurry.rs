@@ -9,9 +9,8 @@ use std::time::Duration;
 use tokio::spawn;
 use toml::Table;
 
-use crate::prompt::get_interaction;
+use crate::prompt::{get_interaction, substitute_interactive};
 use crate::request::{build_client, do_request};
-use crate::substitute::substitute_interactive;
 use crate::util::{split_work, IterExt};
 
 pub async fn flurry_attack(

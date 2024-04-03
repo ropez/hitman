@@ -1,4 +1,3 @@
-use anyhow::{bail, Result};
 use std::str;
 use thiserror::Error;
 use toml::{Table, Value};
@@ -22,38 +21,6 @@ pub enum SubstituteError {
 }
 
 type SubstituteResult<T> = std::result::Result<T, SubstituteError>;
-
-pub trait UserInteraction {
-    fn prompt(&self, key: &str, fallback: Option<&str>) -> Result<String>;
-    fn select(&self, key: &str, values: &[Value]) -> Result<String>;
-}
-
-pub fn substitute_interactive<I>(input: &str, env: &Table, interaction: &I) -> Result<String>
-where
-    I: UserInteraction + ?Sized,
-{
-    match substitute(input, env) {
-        Ok(res) => Ok(res),
-        Err(err) => {
-            let (key, value) = match err {
-                SubstituteError::ReplacementNotFound { key, fallback } => {
-                    let value = interaction.prompt(&key, fallback.as_deref())?;
-                    (key, value)
-                }
-                SubstituteError::ReplacementNotSelected { key, values } => {
-                    let value = interaction.select(&key, &values)?;
-                    (key, value)
-                }
-                e => bail!(e),
-            };
-
-            let mut env = env.clone();
-            env.insert(key, Value::String(value));
-
-            substitute_interactive(input, &env, interaction)
-        }
-    }
-}
 
 pub fn substitute(input: &str, env: &Table) -> SubstituteResult<String> {
     let mut output = String::new();

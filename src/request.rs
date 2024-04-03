@@ -3,19 +3,21 @@ use httparse::Status::*;
 use log::{info, log_enabled, warn, Level};
 use reqwest::{Client, Method, Response, Url};
 use serde_json::Value;
-use std::fs::read_to_string;
-use std::path::Path;
-use std::str;
-use std::str::FromStr;
-use std::sync::Arc;
-use std::time::Duration;
+use std::{
+    fs::read_to_string,
+    path::Path,
+    str::{self, FromStr},
+    sync::Arc,
+    time::Duration,
+};
 use toml::Table;
 
-use crate::env::{update_data, HitmanCookieJar};
-use crate::extract::extract_variables;
-use crate::prompt::get_interaction;
-use crate::substitute::substitute_interactive;
-use crate::util::truncate;
+use crate::{
+    env::{update_data, HitmanCookieJar},
+    extract::extract_variables,
+    prompt::{get_interaction, substitute_interactive},
+    util::truncate,
+};
 
 static USER_AGENT: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"),);
 
