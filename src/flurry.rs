@@ -11,7 +11,7 @@ use toml::Table;
 
 use crate::prompt::get_interaction;
 use crate::request::{build_client, do_request};
-use crate::substitute::substitute;
+use crate::substitute::substitute_interactive;
 use crate::util::{split_work, IterExt};
 
 pub async fn flurry_attack(
@@ -32,7 +32,7 @@ pub async fn flurry_attack(
     warn!("# Sending {flurry_size} requests on {connections} parallel connections...");
 
     let interaction = get_interaction();
-    let buf = substitute(&read_to_string(file_path)?, env, interaction.as_ref())?;
+    let buf = substitute_interactive(&read_to_string(file_path)?, env, interaction.as_ref())?;
 
     let t = std::time::Instant::now();
     let mut spinner =

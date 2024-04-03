@@ -6,10 +6,13 @@ use toml::{Table, Value};
 #[derive(Error, Debug, Clone)]
 pub enum SubstituteError {
     #[error("Replacement not found: {key}")]
-    ReplacementNotFound { key: String },
+    ReplacementNotFound {
+        key: String,
+        fallback: Option<String>,
+    },
 
-    #[error("Replacement not selected: {key}\nSuggestions:\n{suggestions}")]
-    ReplacementNotSelected { key: String, suggestions: String },
+    #[error("Replacement not selected: {key}")]
+    ReplacementNotSelected { key: String, values: Vec<Value> },
 
     #[error("Syntax error")]
     SyntaxError,
@@ -18,34 +21,59 @@ pub enum SubstituteError {
     TypeNotSupported,
 }
 
+type SubstituteResult<T> = std::result::Result<T, SubstituteError>;
+
 pub trait UserInteraction {
     fn prompt(&self, key: &str, fallback: Option<&str>) -> Result<String>;
     fn select(&self, key: &str, values: &[Value]) -> Result<String>;
 }
 
-pub fn substitute<I>(input: &str, env: &Table, interaction: &I) -> Result<String>
-where I: UserInteraction + ?Sized
+pub fn substitute_interactive<I>(input: &str, env: &Table, interaction: &I) -> Result<String>
+where
+    I: UserInteraction + ?Sized,
 {
+    match substitute(input, env) {
+        Ok(res) => Ok(res),
+        Err(err) => {
+            let (key, value) = match err {
+                SubstituteError::ReplacementNotFound { key, fallback } => {
+                    let value = interaction.prompt(&key, fallback.as_deref())?;
+                    (key, value)
+                }
+                SubstituteError::ReplacementNotSelected { key, values } => {
+                    let value = interaction.select(&key, &values)?;
+                    (key, value)
+                }
+                e => bail!(e),
+            };
+
+            let mut env = env.clone();
+            env.insert(key, Value::String(value));
+
+            substitute_interactive(input, &env, interaction)
+        }
+    }
+}
+
+pub fn substitute(input: &str, env: &Table) -> SubstituteResult<String> {
     let mut output = String::new();
 
     for line in input.lines() {
-        output.push_str(&substitute_line(line, env, interaction)?);
+        output.push_str(&substitute_line(line, env)?);
         output.push('\n');
     }
 
     Ok(output)
 }
 
-fn substitute_line<I>(line: &str, env: &Table, interaction: &I) -> Result<String>
-where I: UserInteraction + ?Sized
-{
+fn substitute_line(line: &str, env: &Table) -> SubstituteResult<String> {
     let mut output = String::new();
     let mut slice = line;
     loop {
         match slice.find("{{") {
             None => {
                 if slice.contains("}}") {
-                    bail!(SubstituteError::SyntaxError)
+                    return Err(SubstituteError::SyntaxError);
                 }
                 output.push_str(slice);
                 break;
@@ -55,13 +83,13 @@ where I: UserInteraction + ?Sized
                 slice = &slice[pos..];
 
                 let Some(end) = slice.find("}}").map(|i| i + 2) else {
-                    bail!(SubstituteError::SyntaxError);
+                    return Err(SubstituteError::SyntaxError);
                 };
 
-                let rep = find_replacement(&slice[2..end - 2], env, interaction)?;
+                let rep = find_replacement(&slice[2..end - 2], env)?;
 
                 // Nested substitution
-                let rep = substitute_line(&rep, env, interaction)?;
+                let rep = substitute_line(&rep, env)?;
                 output.push_str(&rep);
 
                 slice = &slice[end..];
@@ -77,9 +105,7 @@ fn valid_character(c: &char) -> bool {
     c.is_ascii_alphabetic() || c.is_ascii_digit() || *c == '_'
 }
 
-fn find_replacement<I>(placeholder: &str, env: &Table, interaction: &I) -> Result<String>
-where I: UserInteraction + ?Sized
-{
+fn find_replacement(placeholder: &str, env: &Table) -> SubstituteResult<String> {
     let mut parts = placeholder.split('|');
 
     let key = parts.next().unwrap_or("").trim();
@@ -92,14 +118,18 @@ where I: UserInteraction + ?Sized
         Some(Value::Integer(v)) => Ok(parse(&v.to_string())),
         Some(Value::Float(v)) => Ok(parse(&v.to_string())),
         Some(Value::Boolean(v)) => Ok(parse(&v.to_string())),
-        Some(Value::Array(arr)) => {
-            interaction.select(&parsed_key, arr)
-        }
-        Some(_) => bail!(SubstituteError::TypeNotSupported),
+        Some(Value::Array(arr)) => Err(SubstituteError::ReplacementNotSelected {
+            key: parsed_key,
+            values: arr.clone(),
+        }),
+        Some(_) => Err(SubstituteError::TypeNotSupported),
         None => {
-            let fallback = parts.next().map(|fb| fb.trim());
+            let fallback = parts.next().map(|fb| fb.trim().to_string());
 
-            interaction.prompt(&parsed_key, fallback)
+            Err(SubstituteError::ReplacementNotFound {
+                key: parsed_key,
+                fallback,
+            })
         }
     }
 }
