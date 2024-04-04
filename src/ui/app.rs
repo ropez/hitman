@@ -9,10 +9,7 @@ use ratatui::{
     style::{Style, Stylize},
     symbols,
     text::{Line, Span},
-    widgets::{
-        Block, BorderType, Clear, HighlightSpacing, List, ListState, Paragraph, StatefulWidget,
-        Widget,
-    },
+    widgets::{Block, BorderType, Clear, List, Paragraph, StatefulWidget, Widget},
     Terminal,
 };
 use serde_json::Value;
@@ -26,7 +23,7 @@ use hitman::{
 
 use super::{
     output::{OutputView, OutputViewState},
-    select::{RequestSelector, RequestSelectorState},
+    select::{RequestSelector, RequestSelectorState, Select, SelectState},
 };
 
 pub struct App {
@@ -34,10 +31,14 @@ pub struct App {
     selector_state: RequestSelectorState,
     output_state: OutputViewState,
     environment_state: Option<bool>,
-    pending_substitution: Option<PendingSubstitution>,
-    pending_options: Vec<(String, String)>,
-    substitution_list_state: ListState,
+    substitution_state: Option<SubstituteState>,
     search: String,
+}
+
+pub struct SubstituteState {
+    pending_substitution: PendingSubstitution,
+    pending_options: Vec<(String, String)>,
+    select_state: SelectState,
 }
 
 impl App {
@@ -59,9 +60,7 @@ impl App {
             selector_state,
             output_state,
             environment_state: None,
-            pending_substitution: None,
-            pending_options: Vec::new(),
-            substitution_list_state: ListState::default(),
+            substitution_state: None,
             search: String::new(),
         })
     }
@@ -76,6 +75,7 @@ impl App {
                 self.render(frame.size(), frame.buffer_mut());
 
                 // XXX Coupling
+                // Check out tui-input
                 frame.set_cursor(
                     frame.size().x + 11 + self.search.len() as u16,
                     frame.size().y + frame.size().height - 3,
@@ -166,12 +166,9 @@ impl App {
             Widget::render(list, inner_area, buf);
         }
 
-        if let Some(PendingSubstitution {
-            key,
-            substitution_type,
-        }) = &self.pending_substitution
-        {
-            match substitution_type {
+        if let Some(ref mut state) = &mut self.substitution_state {
+            let key = &state.pending_substitution.key;
+            match &state.pending_substitution.substitution_type {
                 SubstitutionType::Prompt { fallback } => {
                     // TODO: Check out using tui-input
 
@@ -192,26 +189,18 @@ impl App {
                         },
                         other => other.to_string(),
                     });
-                    let list = List::new(values)
-                        .block(
-                            Block::bordered()
-                                .title(format!("Select substitution value for {{{{{key}}}}}"))
-                                .border_type(BorderType::Rounded)
-                                .style(Style::new().yellow()),
-                        )
-                        .highlight_style(Style::new().reversed())
-                        .highlight_symbol("> ")
-                        .highlight_spacing(HighlightSpacing::Always)
-                        .style(Style::new().cyan());
+
+                    // XXX Code smell!
+                    state.select_state.set_items(values.collect());
+
+                    let select = Select::default().block(
+                        Block::bordered()
+                            .title(format!("Select substitution value for {{{{{key}}}}}")),
+                    );
 
                     let inner_area = area.inner(&Margin::new(42, 10));
                     Widget::render(Clear, inner_area, buf);
-                    StatefulWidget::render(
-                        list,
-                        inner_area,
-                        buf,
-                        &mut self.substitution_list_state,
-                    );
+                    StatefulWidget::render(select, inner_area, buf, &mut state.select_state);
                 }
             }
         }
@@ -219,30 +208,25 @@ impl App {
 
     async fn handle_events(&mut self) -> Result<bool> {
         if event::poll(Duration::from_millis(50))? {
-            match event::read()? {
+            let event = event::read()?;
+            match event {
                 Event::Key(key) if key.kind == KeyEventKind::Press => {
+                    if let Some(ref mut state) = &mut self.substitution_state {
+                        if state.select_state.handle_event(event) {
+                            return Ok(false);
+                        }
+                    }
+
                     if key.modifiers.contains(KeyModifiers::CONTROL) {
                         match key.code {
                             KeyCode::Char('c') | KeyCode::Char('q') => {
                                 return Ok(true);
                             }
                             KeyCode::Char('j') => {
-                                if self.pending_substitution.is_some() {
-                                    self.substitution_list_state.select(
-                                        self.substitution_list_state.selected().map(|i| i + 1),
-                                    );
-                                } else {
-                                    self.selector_state.select_next();
-                                }
+                                self.selector_state.select_next();
                             }
                             KeyCode::Char('k') => {
-                                if self.pending_substitution.is_some() {
-                                    self.substitution_list_state.select(
-                                        self.substitution_list_state.selected().map(|i| i - 1),
-                                    );
-                                } else {
-                                    self.selector_state.select_prev();
-                                }
+                                self.selector_state.select_prev();
                             }
                             KeyCode::Char('p') => {
                                 self.output_state.scroll_up();
@@ -284,20 +268,22 @@ impl App {
 
                                     let root_dir = self.root_dir.clone();
 
-                                    if let Some(PendingSubstitution {
-                                        key,
-                                        substitution_type,
-                                    }) = &self.pending_substitution
-                                    {
-                                        match substitution_type {
+                                    let mut pending_options = self
+                                        .substitution_state
+                                        .as_ref()
+                                        .map(|s| s.pending_options.clone())
+                                        .unwrap_or(Vec::new());
+
+                                    if let Some(ref state) = &self.substitution_state {
+                                        let key = state.pending_substitution.key.clone();
+                                        match &state.pending_substitution.substitution_type {
                                             SubstitutionType::Prompt { fallback } => {
                                                 let value = fallback.as_deref().unwrap_or("");
-                                                self.pending_options
-                                                    .push((key.clone(), value.into()));
+                                                pending_options.push((key, value.into()));
                                             }
                                             SubstitutionType::Select { values } => {
                                                 if let Some(selected) =
-                                                    self.substitution_list_state.selected()
+                                                    state.select_state.selected()
                                                 {
                                                     let value = match &values[selected] {
                                                         toml::Value::Table(t) => {
@@ -314,19 +300,17 @@ impl App {
                                                         other => other.to_string(),
                                                     };
 
-                                                    self.pending_options.push((key.clone(), value));
+                                                    pending_options.push((key, value));
                                                 }
                                             }
                                         }
                                     }
 
-                                    self.pending_substitution = None;
-                                    let env = load_env(&root_dir, &path, &self.pending_options)?;
+                                    self.substitution_state = None;
+                                    let env = load_env(&root_dir, &path, &pending_options)?;
 
                                     match substitute(&read_to_string(path)?, &env) {
                                         Ok(buf) => {
-                                            self.pending_options.clear();
-
                                             let handle =
                                                 tokio::spawn(
                                                     async move { make_request(&buf).await },
@@ -337,9 +321,11 @@ impl App {
                                         }
                                         Err(err) => match err {
                                             SubstituteError::ReplacementNotFound(pending) => {
-                                                self.pending_substitution = Some(pending);
-                                                self.substitution_list_state =
-                                                    ListState::default().with_selected(Some(0));
+                                                self.substitution_state = Some(SubstituteState {
+                                                    pending_options,
+                                                    pending_substitution: pending,
+                                                    select_state: SelectState::new(Vec::new()),
+                                                });
                                             }
                                             e => bail!(e),
                                         },
@@ -382,8 +368,6 @@ async fn make_request(buf: &str) -> Result<(String, String)> {
         // let vars = extract_variables(&json, &env)?;
         // update_data(&vars)?;
     }
-
-    // self.output_state.update(request, response);
 
     Ok((request, response))
 }
