@@ -178,8 +178,8 @@ impl SelectState {
         self.list_state.selected()
     }
 
-    pub fn set_items(&mut self, items: Vec<String>) {
-        self.items = items;
+    pub fn selected_value(&self) -> Option<String> {
+        self.selected().map(|i| self.items[i].clone())
     }
 
     pub fn select_next(&mut self) {
