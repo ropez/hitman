@@ -2,16 +2,22 @@ use std::str;
 use thiserror::Error;
 use toml::{Table, Value};
 
+#[derive(Debug, Clone)]
+pub struct PendingSubstitution {
+    pub key: String,
+    pub substitution_type: SubstitutionType,
+}
+
+#[derive(Debug, Clone)]
+pub enum SubstitutionType {
+    Prompt { fallback: Option<String> },
+    Select { values: Vec<toml::Value> },
+}
+
 #[derive(Error, Debug, Clone)]
 pub enum SubstituteError {
-    #[error("Replacement not found: {key}")]
-    ReplacementNotFound {
-        key: String,
-        fallback: Option<String>,
-    },
-
-    #[error("Replacement not selected: {key}")]
-    ReplacementNotSelected { key: String, values: Vec<Value> },
+    #[error("Missing substitution for {0:?}")]
+    ReplacementNotFound(PendingSubstitution),
 
     #[error("Syntax error")]
     SyntaxError,
@@ -85,18 +91,20 @@ fn find_replacement(placeholder: &str, env: &Table) -> SubstituteResult<String> 
         Some(Value::Integer(v)) => Ok(parse(&v.to_string())),
         Some(Value::Float(v)) => Ok(parse(&v.to_string())),
         Some(Value::Boolean(v)) => Ok(parse(&v.to_string())),
-        Some(Value::Array(arr)) => Err(SubstituteError::ReplacementNotSelected {
+        Some(Value::Array(arr)) => Err(SubstituteError::ReplacementNotFound(PendingSubstitution {
             key: parsed_key,
-            values: arr.clone(),
-        }),
+            substitution_type: SubstitutionType::Select {
+                values: arr.clone(),
+            },
+        })),
         Some(_) => Err(SubstituteError::TypeNotSupported),
         None => {
             let fallback = parts.next().map(|fb| fb.trim().to_string());
 
-            Err(SubstituteError::ReplacementNotFound {
+            Err(SubstituteError::ReplacementNotFound(PendingSubstitution {
                 key: parsed_key,
-                fallback,
-            })
+                substitution_type: SubstitutionType::Prompt { fallback },
+            }))
         }
     }
 }

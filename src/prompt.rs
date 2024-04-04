@@ -3,7 +3,7 @@ use inquire::{list_option::ListOption, DateSelect, Select, Text};
 use std::env;
 use toml::{Table, Value};
 
-use crate::substitute::{substitute, SubstituteError};
+use crate::substitute::{substitute, PendingSubstitution, SubstituteError, SubstitutionType};
 
 fn set_boolean(name: &str, value: bool) {
     env::set_var(name, if value { "y" } else { "n" });
@@ -64,14 +64,19 @@ where
         Ok(res) => Ok(res),
         Err(err) => {
             let (key, value) = match err {
-                SubstituteError::ReplacementNotFound { key, fallback } => {
-                    let value = interaction.prompt(&key, fallback.as_deref())?;
-                    (key, value)
-                }
-                SubstituteError::ReplacementNotSelected { key, values } => {
-                    let value = interaction.select(&key, &values)?;
-                    (key, value)
-                }
+                SubstituteError::ReplacementNotFound(PendingSubstitution {
+                    key,
+                    substitution_type,
+                }) => match substitution_type {
+                    SubstitutionType::Prompt { fallback } => {
+                        let value = interaction.prompt(&key, fallback.as_deref())?;
+                        (key, value)
+                    }
+                    SubstitutionType::Select { values } => {
+                        let value = interaction.select(&key, &values)?;
+                        (key, value)
+                    }
+                },
                 e => bail!(e),
             };
 

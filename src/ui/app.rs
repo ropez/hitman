@@ -1,9 +1,4 @@
-use std::{
-    fmt::Write,
-    fs::read_to_string,
-    path::{Path, PathBuf},
-    time::Duration,
-};
+use std::{fmt::Write, fs::read_to_string, path::PathBuf, time::Duration};
 
 use anyhow::{bail, Context, Result};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
@@ -26,7 +21,7 @@ use hitman::{
     env::{find_available_requests, find_root_dir, load_env, update_data},
     extract::extract_variables,
     request::{build_client, do_request},
-    substitute::{substitute, SubstituteError},
+    substitute::{substitute, PendingSubstitution, SubstituteError, SubstitutionType},
 };
 
 use super::{
@@ -43,18 +38,6 @@ pub struct App {
     pending_options: Vec<(String, String)>,
     substitution_list_state: ListState,
     search: String,
-}
-
-pub enum PendingSubstitution {
-    Prompt {
-        key: String,
-        fallback: Option<String>,
-    },
-
-    Select {
-        key: String,
-        values: Vec<toml::Value>,
-    },
 }
 
 impl App {
@@ -183,9 +166,15 @@ impl App {
             Widget::render(list, inner_area, buf);
         }
 
-        if let Some(ref pending) = self.pending_substitution {
-            match pending {
-                PendingSubstitution::Prompt { key, fallback } => {
+        if let Some(PendingSubstitution {
+            key,
+            substitution_type,
+        }) = &self.pending_substitution
+        {
+            match substitution_type {
+                SubstitutionType::Prompt { fallback } => {
+                    // TODO: Check out using tui-input
+
                     let inner_area = area.inner(&Margin::new(42, 10));
                     Widget::render(Clear, inner_area, buf);
                     Widget::render(
@@ -194,7 +183,7 @@ impl App {
                         buf,
                     );
                 }
-                PendingSubstitution::Select { key, values } => {
+                SubstitutionType::Select { values } => {
                     let values = values.iter().map(|v| match v {
                         toml::Value::Table(t) => match t.get("name") {
                             Some(toml::Value::String(value)) => value.clone(),
@@ -295,13 +284,18 @@ impl App {
 
                                     let root_dir = self.root_dir.clone();
 
-                                    if let Some(ref foo) = self.pending_substitution {
-                                        match foo {
-                                            PendingSubstitution::Prompt { key, fallback } => {
+                                    if let Some(PendingSubstitution {
+                                        key,
+                                        substitution_type,
+                                    }) = &self.pending_substitution
+                                    {
+                                        match substitution_type {
+                                            SubstitutionType::Prompt { fallback } => {
                                                 let value = fallback.as_deref().unwrap_or("");
-                                                self.pending_options.push((key.clone(), value.into()));
+                                                self.pending_options
+                                                    .push((key.clone(), value.into()));
                                             }
-                                            PendingSubstitution::Select { key, values } => {
+                                            SubstitutionType::Select { values } => {
                                                 if let Some(selected) =
                                                     self.substitution_list_state.selected()
                                                 {
@@ -320,10 +314,7 @@ impl App {
                                                         other => other.to_string(),
                                                     };
 
-                                                    self.pending_options.push((
-                                                        key.clone(),
-                                                        value,
-                                                    ));
+                                                    self.pending_options.push((key.clone(), value));
                                                 }
                                             }
                                         }
@@ -345,25 +336,8 @@ impl App {
                                             self.output_state.update(request, response);
                                         }
                                         Err(err) => match err {
-                                            SubstituteError::ReplacementNotFound {
-                                                key,
-                                                fallback,
-                                            } => {
-                                                self.pending_substitution =
-                                                    Some(PendingSubstitution::Prompt {
-                                                        key,
-                                                        fallback,
-                                                    });
-                                            }
-                                            SubstituteError::ReplacementNotSelected {
-                                                key,
-                                                values,
-                                            } => {
-                                                self.pending_substitution =
-                                                    Some(PendingSubstitution::Select {
-                                                        key,
-                                                        values,
-                                                    });
+                                            SubstituteError::ReplacementNotFound(pending) => {
+                                                self.pending_substitution = Some(pending);
                                                 self.substitution_list_state =
                                                     ListState::default().with_selected(Some(0));
                                             }
