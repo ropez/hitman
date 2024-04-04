@@ -5,7 +5,7 @@ use std::{
     time::Duration,
 };
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::{
     backend::Backend,
@@ -14,7 +14,10 @@ use ratatui::{
     style::{Style, Stylize},
     symbols,
     text::{Line, Span},
-    widgets::{Block, BorderType, Clear, List, Paragraph, StatefulWidget, Widget},
+    widgets::{
+        Block, BorderType, Clear, HighlightSpacing, List, ListState, Paragraph, StatefulWidget,
+        Widget,
+    },
     Terminal,
 };
 use serde_json::Value;
@@ -23,12 +26,12 @@ use hitman::{
     env::{find_available_requests, find_root_dir, load_env, update_data},
     extract::extract_variables,
     request::{build_client, do_request},
-    substitute::{substitute},
+    substitute::{substitute, SubstituteError},
 };
 
 use super::{
     output::{OutputView, OutputViewState},
-    select::{RequestSelector, RequestSelectorState}, interaction::UiUserInteraction,
+    select::{RequestSelector, RequestSelectorState},
 };
 
 pub struct App {
@@ -36,7 +39,22 @@ pub struct App {
     selector_state: RequestSelectorState,
     output_state: OutputViewState,
     environment_state: Option<bool>,
+    pending_substitution: Option<PendingSubstitution>,
+    pending_options: Vec<(String, String)>,
+    substitution_list_state: ListState,
     search: String,
+}
+
+pub enum PendingSubstitution {
+    Prompt {
+        key: String,
+        fallback: Option<String>,
+    },
+
+    Select {
+        key: String,
+        values: Vec<toml::Value>,
+    },
 }
 
 impl App {
@@ -58,6 +76,9 @@ impl App {
             selector_state,
             output_state,
             environment_state: None,
+            pending_substitution: None,
+            pending_options: Vec::new(),
+            substitution_list_state: ListState::default(),
             search: String::new(),
         })
     }
@@ -161,6 +182,50 @@ impl App {
             Widget::render(Clear, inner_area, buf);
             Widget::render(list, inner_area, buf);
         }
+
+        if let Some(ref pending) = self.pending_substitution {
+            match pending {
+                PendingSubstitution::Prompt { key, fallback } => {
+                    let inner_area = area.inner(&Margin::new(42, 10));
+                    Widget::render(Clear, inner_area, buf);
+                    Widget::render(
+                        Block::bordered().title(format!("Enter value for {key}")),
+                        inner_area,
+                        buf,
+                    );
+                }
+                PendingSubstitution::Select { key, values } => {
+                    let values = values.iter().map(|v| match v {
+                        toml::Value::Table(t) => match t.get("name") {
+                            Some(toml::Value::String(value)) => value.clone(),
+                            Some(value) => value.to_string(),
+                            None => t.to_string(),
+                        },
+                        other => other.to_string(),
+                    });
+                    let list = List::new(values)
+                        .block(
+                            Block::bordered()
+                                .title(format!("Select substitution value for {{{{{key}}}}}"))
+                                .border_type(BorderType::Rounded)
+                                .style(Style::new().yellow()),
+                        )
+                        .highlight_style(Style::new().reversed())
+                        .highlight_symbol("> ")
+                        .highlight_spacing(HighlightSpacing::Always)
+                        .style(Style::new().cyan());
+
+                    let inner_area = area.inner(&Margin::new(42, 10));
+                    Widget::render(Clear, inner_area, buf);
+                    StatefulWidget::render(
+                        list,
+                        inner_area,
+                        buf,
+                        &mut self.substitution_list_state,
+                    );
+                }
+            }
+        }
     }
 
     async fn handle_events(&mut self) -> Result<bool> {
@@ -173,10 +238,22 @@ impl App {
                                 return Ok(true);
                             }
                             KeyCode::Char('j') => {
-                                self.selector_state.select_next();
+                                if self.pending_substitution.is_some() {
+                                    self.substitution_list_state.select(
+                                        self.substitution_list_state.selected().map(|i| i + 1),
+                                    );
+                                } else {
+                                    self.selector_state.select_next();
+                                }
                             }
                             KeyCode::Char('k') => {
-                                self.selector_state.select_prev();
+                                if self.pending_substitution.is_some() {
+                                    self.substitution_list_state.select(
+                                        self.substitution_list_state.selected().map(|i| i - 1),
+                                    );
+                                } else {
+                                    self.selector_state.select_prev();
+                                }
                             }
                             KeyCode::Char('p') => {
                                 self.output_state.scroll_up();
@@ -215,7 +292,84 @@ impl App {
                             KeyCode::Enter => {
                                 if let Some(file_path) = self.selector_state.selected_path() {
                                     let path = PathBuf::try_from(file_path)?;
-                                    self.make_request(&path).await?;
+
+                                    let root_dir = self.root_dir.clone();
+
+                                    if let Some(ref foo) = self.pending_substitution {
+                                        match foo {
+                                            PendingSubstitution::Prompt { key, fallback } => {
+                                                let value = fallback.as_deref().unwrap_or("");
+                                                self.pending_options.push((key.clone(), value.into()));
+                                            }
+                                            PendingSubstitution::Select { key, values } => {
+                                                if let Some(selected) =
+                                                    self.substitution_list_state.selected()
+                                                {
+                                                    let value = match &values[selected] {
+                                                        toml::Value::Table(t) => {
+                                                            match t.get("value") {
+                                                                Some(toml::Value::String(
+                                                                    value,
+                                                                )) => value.clone(),
+                                                                Some(value) => value.to_string(),
+                                                                _ => bail!(
+                                                                    "Replacement not found: {key}"
+                                                                ),
+                                                            }
+                                                        }
+                                                        other => other.to_string(),
+                                                    };
+
+                                                    self.pending_options.push((
+                                                        key.clone(),
+                                                        value,
+                                                    ));
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    self.pending_substitution = None;
+                                    let env = load_env(&root_dir, &path, &self.pending_options)?;
+
+                                    match substitute(&read_to_string(path)?, &env) {
+                                        Ok(buf) => {
+                                            self.pending_options.clear();
+
+                                            let handle =
+                                                tokio::spawn(
+                                                    async move { make_request(&buf).await },
+                                                );
+
+                                            let (request, response) = handle.await??;
+                                            self.output_state.update(request, response);
+                                        }
+                                        Err(err) => match err {
+                                            SubstituteError::ReplacementNotFound {
+                                                key,
+                                                fallback,
+                                            } => {
+                                                self.pending_substitution =
+                                                    Some(PendingSubstitution::Prompt {
+                                                        key,
+                                                        fallback,
+                                                    });
+                                            }
+                                            SubstituteError::ReplacementNotSelected {
+                                                key,
+                                                values,
+                                            } => {
+                                                self.pending_substitution =
+                                                    Some(PendingSubstitution::Select {
+                                                        key,
+                                                        values,
+                                                    });
+                                                self.substitution_list_state =
+                                                    ListState::default().with_selected(Some(0));
+                                            }
+                                            e => bail!(e),
+                                        },
+                                    }
                                 }
                             }
                             _ => (),
@@ -227,36 +381,35 @@ impl App {
         }
         Ok(false)
     }
+}
 
-    async fn make_request(&mut self, path: &Path) -> Result<()> {
-        let options = vec![];
-        let env = load_env(&self.root_dir, path, &options)?;
+async fn make_request(buf: &str) -> Result<(String, String)> {
+    let client = build_client()?;
 
-        let client = build_client()?;
-        let buf = substitute(&read_to_string(path)?, &env, &UiUserInteraction)?;
-
-        let mut request = String::new();
-        for line in buf.lines() {
-            writeln!(request, "> {}", line)?;
-        }
-        writeln!(request)?;
-
-        let (res, _elapsed) = do_request(&client, &buf).await?;
-
-        let mut response = String::new();
-        for (name, value) in res.headers() {
-            writeln!(response, "< {}: {}", name, value.to_str()?)?;
-        }
-        writeln!(response)?;
-
-        if let Ok(json) = res.json::<Value>().await {
-            writeln!(response, "{}", serde_json::to_string_pretty(&json)?)?;
-            let vars = extract_variables(&json, &env)?;
-            update_data(&vars)?;
-        }
-
-        self.output_state.update(request, response);
-
-        Ok(())
+    let mut request = String::new();
+    for line in buf.lines() {
+        writeln!(request, "> {}", line)?;
     }
+    writeln!(request)?;
+
+    let (res, _elapsed) = do_request(&client, &buf).await?;
+
+    let mut response = String::new();
+    for (name, value) in res.headers() {
+        writeln!(response, "< {}: {}", name, value.to_str()?)?;
+    }
+    writeln!(response)?;
+
+    if let Ok(json) = res.json::<Value>().await {
+        writeln!(response, "{}", serde_json::to_string_pretty(&json)?)?;
+
+        // let options = vec![];
+        // let env = load_env(&root_dir, &path, &options)?;
+        // let vars = extract_variables(&json, &env)?;
+        // update_data(&vars)?;
+    }
+
+    // self.output_state.update(request, response);
+
+    Ok((request, response))
 }
