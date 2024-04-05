@@ -47,7 +47,7 @@ impl Component for RequestSelector {
     }
 }
 
-fn format_item<'a>(text: String, indexes: &Vec<usize>) -> ListItem<'a> {
+fn format_item<'a>(text: String, indexes: &[usize]) -> ListItem<'a> {
     // FIXME: Make '.http' part dark gray
     // For this, we need to implement SelectItem specifically for request paths
 
@@ -58,7 +58,7 @@ fn format_item<'a>(text: String, indexes: &Vec<usize>) -> ListItem<'a> {
                 Span::from(String::from(c)).style(if indexes.contains(&i) {
                     Style::new().yellow()
                 } else {
-                    Style::new().clone()
+                    Style::new()
                 })
             })
             .collect::<Vec<_>>(),
@@ -72,7 +72,7 @@ pub trait SelectItem {
         self.text().into()
     }
 
-    fn render_highlighted<'a>(&self, highlight: &Vec<usize>) -> ListItem<'a> {
+    fn render_highlighted<'a>(&self, highlight: &[usize]) -> ListItem<'a> {
         format_item(self.text(), highlight)
     }
 }
@@ -141,7 +141,7 @@ where
         self.list_state.select(Some(0));
     }
 
-    fn get_filtered_items<'a>(&self) -> Vec<(&T, Option<Vec<usize>>)> {
+    fn get_filtered_items(&self) -> Vec<(&T, Option<Vec<usize>>)> {
         let term = self.search_input.value();
         if term.is_empty() {
             self.items.iter().map(|i| (i, None)).collect()

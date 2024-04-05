@@ -2,7 +2,7 @@ use anyhow::{bail, Result};
 use futures::future::join_all;
 use log::warn;
 use spinoff::{spinners, Color, Spinner, Streams};
-use std::convert::identity;
+
 use std::fs::read_to_string;
 use std::path::Path;
 use std::time::Duration;
@@ -61,7 +61,7 @@ pub async fn flurry_attack(
         .into_iter()
         .filter_map(|h| h.ok())
         .flatten()
-        .filter_map(identity)
+        .flatten()
         .collect();
 
     spinner.stop();
