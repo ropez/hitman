@@ -21,7 +21,7 @@ use tokio::task::JoinHandle;
 
 use super::{
     output::{OutputView, OutputViewState},
-    select::{Component, RequestSelector, Select},
+    select::{Component, RequestSelector, Select, SelectItem},
 };
 
 pub struct App {
@@ -54,8 +54,7 @@ pub enum PendingState {
         fallback: Option<String>,
     },
     Select {
-        values: Vec<toml::Value>,
-        component: Select,
+        component: Select<toml::Value>,
     },
 }
 
@@ -151,7 +150,7 @@ impl App {
                 ..
             } => {
                 match pending_state {
-                    PendingState::Prompt { fallback } => {
+                    PendingState::Prompt { fallback, .. } => {
                         // TODO: Check out using tui-input
 
                         let inner_area = area.inner(&Margin::new(42, 10));
@@ -213,7 +212,7 @@ impl App {
                                         return Ok(false);
                                     }
                                 }
-                                PendingState::Prompt { fallback } => {
+                                PendingState::Prompt { fallback, .. } => {
                                     // TODO
                                 }
                             }
@@ -313,18 +312,15 @@ impl App {
             } = &self.state
             {
                 match pending_state {
-                    PendingState::Prompt { fallback } => {
+                    PendingState::Prompt { fallback, .. } => {
                         // TODO: Input
                         let value = fallback.as_deref().unwrap_or("");
                         pending_options.push((key.clone(), value.into()));
                     }
-                    PendingState::Select {
-                        values,
-                        component: select_component,
-                    } => {
+                    PendingState::Select { component } => {
                         // FIXME: Index is not correct when filtered
-                        if let Some(selected) = select_component.selected() {
-                            let value = match &values[selected] {
+                        if let Some(selected) = component.selected_item() {
+                            let value = match selected {
                                 toml::Value::Table(t) => match t.get("value") {
                                     Some(toml::Value::String(value)) => {
                                         value.clone()
@@ -355,34 +351,15 @@ impl App {
                     SubstituteError::ReplacementNotFound(not_found) => {
                         match &not_found.substitution_type {
                             SubstitutionType::Select { values } => {
-                                // FIXME: We some redundency in the state. Can
-                                // we somehow make the Select component hold on
-                                // to the `values`, and use something like Into<String>?
-                                let items = values.iter().map(|v| match v {
-                                    toml::Value::Table(t) => {
-                                        match t.get("name") {
-                                            Some(toml::Value::String(
-                                                value,
-                                            )) => value.clone(),
-                                            Some(value) => value.to_string(),
-                                            None => t.to_string(),
-                                        }
-                                    }
-                                    other => other.to_string(),
-                                });
-
-                                let select = Select::new(
+                                let component = Select::new(
                                     format!("Select substitution value for {{{{{}}}}}", &not_found.key),
-                                    items.collect(),
+                                    values.clone(),
                                 );
 
                                 self.state = AppState::PendingValue {
                                     key: not_found.key,
                                     pending_options,
-                                    pending_state: PendingState::Select {
-                                        values: values.clone(),
-                                        component: select,
-                                    },
+                                    pending_state: PendingState::Select {component },
                                 };
                             }
                             SubstitutionType::Prompt { fallback } => {
@@ -432,4 +409,21 @@ async fn make_request(buf: &str) -> Result<(String, String)> {
     }
 
     Ok((request, response))
+}
+
+impl SelectItem for toml::Value {
+    fn text(&self) -> String {
+        match self {
+            toml::Value::Table(t) => {
+                match t.get("name") {
+                    Some(toml::Value::String(
+                        value,
+                    )) => value.clone(),
+                    Some(value) => value.to_string(),
+                    None => t.to_string(),
+                }
+            }
+            other => other.to_string(),
+        }
+    }
 }
