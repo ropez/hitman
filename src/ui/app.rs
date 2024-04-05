@@ -6,7 +6,7 @@ use ratatui::{
     backend::Backend,
     layout::{Constraint, Direction, Layout, Margin, Rect},
     style::{Style, Stylize},
-    widgets::{Block, BorderType, Clear, Paragraph},
+    widgets::Paragraph,
     Frame, Terminal,
 };
 use tokio::task::JoinHandle;
@@ -20,6 +20,7 @@ use hitman::{
 
 use super::{
     output::OutputView,
+    progress::Progress,
     prompt::Prompt,
     select::{RequestSelector, Select, SelectItem},
     Component,
@@ -45,6 +46,7 @@ pub enum AppState {
 
     RunningRequest {
         handle: JoinHandle<Result<(String, String)>>,
+        progress: Progress,
     },
 
     SelectEnvironment {
@@ -88,7 +90,7 @@ impl App {
         while !should_quit {
             terminal.draw(|frame| self.render_ui(frame))?;
 
-            if let AppState::RunningRequest { handle } = &mut self.state {
+            if let AppState::RunningRequest { handle, .. } = &mut self.state {
                 if handle.is_finished() {
                     let (request, response) = handle.await??;
                     self.output_view.update(request, response);
@@ -156,15 +158,8 @@ impl App {
                 component.render_ui(frame, inner_area);
             }
 
-            AppState::RunningRequest { .. } => {
-                // TODO: Progress spinner component
-                let loading = Paragraph::new("...waiting...")
-                    .centered()
-                    .block(Block::bordered().border_type(BorderType::Rounded));
-
-                let inner_area = area.inner(&Margin::new(72, 15));
-                frame.render_widget(Clear, inner_area);
-                frame.render_widget(loading, inner_area);
+            AppState::RunningRequest { progress, .. } => {
+                progress.render_ui(frame, frame.size());
             }
 
             _ => (),
@@ -251,7 +246,7 @@ impl App {
                             }
                         }
 
-                        AppState::RunningRequest { handle } => {
+                        AppState::RunningRequest { handle, .. } => {
                             if key.modifiers.contains(KeyModifiers::CONTROL) {
                                 match key.code {
                                     KeyCode::Char('c') | KeyCode::Char('q') => {
@@ -329,7 +324,10 @@ impl App {
                     let handle =
                         tokio::spawn(async move { make_request(&buf).await });
 
-                    self.state = AppState::RunningRequest { handle };
+                    self.state = AppState::RunningRequest {
+                        handle,
+                        progress: Progress,
+                    };
                 }
                 Err(err) => match err {
                     SubstituteError::MultipleValuesFound { key, values } => {
