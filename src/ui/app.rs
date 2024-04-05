@@ -6,18 +6,18 @@ use ratatui::{
     backend::Backend,
     layout::{Constraint, Direction, Layout, Margin, Rect},
     style::{Style, Stylize},
-    widgets::{Block, BorderType, Clear, List, Paragraph},
+    widgets::{Block, BorderType, Clear, Paragraph},
     Frame, Terminal,
 };
-use serde_json::Value;
+use tokio::task::JoinHandle;
+use toml::Value;
 
 use hitman::{
     env::{find_available_requests, find_root_dir, load_env, update_data},
     extract::extract_variables,
     request::{build_client, do_request},
-    substitute::{substitute, SubstituteError, SubstitutionType},
+    substitute::{substitute, SubstituteError},
 };
-use tokio::task::JoinHandle;
 
 use super::{
     output::{OutputView, OutputViewState},
@@ -46,21 +46,21 @@ pub enum AppState {
         handle: JoinHandle<Result<(String, String)>>,
     },
 
-    SelectEnvironment,
+    SelectEnvironment {
+        component: Select<String>,
+    },
 }
 
 pub enum PendingState {
-    Prompt {
-        fallback: Option<String>,
-    },
-    Select {
-        component: Select<toml::Value>,
-    },
+    Prompt { fallback: Option<String> },
+    Select { component: Select<Value> },
 }
 
 impl App {
     pub fn new() -> Result<Self> {
         let root_dir = find_root_dir()?.context("No hitman.toml found")?;
+
+        // FIXME: Need to live update requests
 
         let reqs = find_available_requests(&root_dir)?;
         let reqs: Vec<String> = reqs
@@ -168,18 +168,9 @@ impl App {
                 }
             }
 
-            AppState::SelectEnvironment => {
-                let list = List::new(["Local", "Remote", "Prod"])
-                    .block(
-                        Block::bordered()
-                            .title("Select environment")
-                            .border_type(BorderType::Rounded),
-                    )
-                    .style(Style::new().white().on_blue());
-
+            AppState::SelectEnvironment { component } => {
                 let inner_area = area.inner(&Margin::new(42, 10));
-                frame.render_widget(Clear, inner_area);
-                frame.render_widget(list, inner_area);
+                component.render_ui(frame, inner_area);
             }
 
             AppState::RunningRequest { .. } => {
@@ -251,8 +242,21 @@ impl App {
                                         self.output_state.scroll_down();
                                     }
                                     KeyCode::Char('s') => {
+                                        let envs: Vec<String> = vec![
+                                            "Local".into(),
+                                            "Remote".into(),
+                                            "Production".into(),
+                                        ];
+
+                                        let component = Select::new(
+                                            "Select environment".into(),
+                                            envs,
+                                        );
+
                                         self.state =
-                                            AppState::SelectEnvironment;
+                                            AppState::SelectEnvironment {
+                                                component,
+                                            };
                                     }
                                     _ => (),
                                 }
@@ -278,7 +282,11 @@ impl App {
                             }
                         }
 
-                        AppState::SelectEnvironment => {
+                        AppState::SelectEnvironment { component } => {
+                            if component.handle_event(event) {
+                                return Ok(false);
+                            }
+
                             if key.modifiers.contains(KeyModifiers::CONTROL) {
                                 match key.code {
                                     KeyCode::Char('c') | KeyCode::Char('q') => {
@@ -318,13 +326,10 @@ impl App {
                         pending_options.push((key.clone(), value.into()));
                     }
                     PendingState::Select { component } => {
-                        // FIXME: Index is not correct when filtered
                         if let Some(selected) = component.selected_item() {
                             let value = match selected {
-                                toml::Value::Table(t) => match t.get("value") {
-                                    Some(toml::Value::String(value)) => {
-                                        value.clone()
-                                    }
+                                Value::Table(t) => match t.get("value") {
+                                    Some(Value::String(value)) => value.clone(),
                                     Some(value) => value.to_string(),
                                     _ => bail!("Replacement not found: {key}"),
                                 },
@@ -348,30 +353,29 @@ impl App {
                     self.state = AppState::RunningRequest { handle };
                 }
                 Err(err) => match err {
-                    SubstituteError::ReplacementNotFound(not_found) => {
-                        match &not_found.substitution_type {
-                            SubstitutionType::Select { values } => {
-                                let component = Select::new(
-                                    format!("Select substitution value for {{{{{}}}}}", &not_found.key),
-                                    values.clone(),
-                                );
+                    SubstituteError::MultipleValuesFound { key, values } => {
+                        let component = Select::new(
+                            format!(
+                                "Select substitution value for {{{{{}}}}}",
+                                &key
+                            ),
+                            values.clone(),
+                        );
 
-                                self.state = AppState::PendingValue {
-                                    key: not_found.key,
-                                    pending_options,
-                                    pending_state: PendingState::Select {component },
-                                };
-                            }
-                            SubstitutionType::Prompt { fallback } => {
-                                self.state = AppState::PendingValue {
-                                    key: not_found.key,
-                                    pending_options,
-                                    pending_state: PendingState::Prompt {
-                                        fallback: fallback.clone(),
-                                    },
-                                };
-                            }
-                        }
+                        self.state = AppState::PendingValue {
+                            key,
+                            pending_options,
+                            pending_state: PendingState::Select { component },
+                        };
+                    }
+                    SubstituteError::ValueNotFound { key, fallback } => {
+                        self.state = AppState::PendingValue {
+                            key,
+                            pending_options,
+                            pending_state: PendingState::Prompt {
+                                fallback: fallback.clone(),
+                            },
+                        };
                     }
                     e => bail!(e),
                 },
@@ -399,7 +403,7 @@ async fn make_request(buf: &str) -> Result<(String, String)> {
     }
     writeln!(response)?;
 
-    if let Ok(json) = res.json::<Value>().await {
+    if let Ok(json) = res.json::<serde_json::Value>().await {
         writeln!(response, "{}", serde_json::to_string_pretty(&json)?)?;
 
         // let options = vec![];
@@ -411,18 +415,14 @@ async fn make_request(buf: &str) -> Result<(String, String)> {
     Ok((request, response))
 }
 
-impl SelectItem for toml::Value {
+impl SelectItem for Value {
     fn text(&self) -> String {
         match self {
-            toml::Value::Table(t) => {
-                match t.get("name") {
-                    Some(toml::Value::String(
-                        value,
-                    )) => value.clone(),
-                    Some(value) => value.to_string(),
-                    None => t.to_string(),
-                }
-            }
+            Value::Table(t) => match t.get("name") {
+                Some(Value::String(value)) => value.clone(),
+                Some(value) => value.to_string(),
+                None => t.to_string(),
+            },
             other => other.to_string(),
         }
     }
