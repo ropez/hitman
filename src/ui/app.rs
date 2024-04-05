@@ -1,4 +1,9 @@
-use std::{fmt::Write, fs::read_to_string, path::PathBuf, time::Duration};
+use std::{
+    fmt::Write,
+    fs::read_to_string,
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
 use anyhow::{bail, Context, Result};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
@@ -13,7 +18,8 @@ use tokio::task::JoinHandle;
 use toml::Value;
 
 use hitman::{
-    env::{find_available_requests, find_root_dir, load_env},
+    env::{find_available_requests, find_root_dir, load_env, update_data},
+    extract::extract_variables,
     request::{build_client, do_request},
     substitute::{substitute, SubstituteError},
 };
@@ -167,6 +173,9 @@ impl App {
     }
 
     async fn handle_events(&mut self) -> Result<bool> {
+        // FIXME: Detect state changes, and avoid rerender
+        // FIXME: No async (return "commands" instead)
+
         if event::poll(Duration::from_millis(50))? {
             let event = event::read()?;
             if let Event::Key(key) = event {
@@ -319,10 +328,13 @@ impl App {
             let path = PathBuf::from(file_path);
             let env = load_env(&root_dir, &path, &pending_options)?;
 
-            match substitute(&read_to_string(path)?, &env) {
+            match substitute(&read_to_string(path.clone())?, &env) {
                 Ok(buf) => {
-                    let handle =
-                        tokio::spawn(async move { make_request(&buf).await });
+                    let root_dir = root_dir.clone();
+                    let file_path = path.clone();
+                    let handle = tokio::spawn(async move {
+                        make_request(&buf, &root_dir, &file_path).await
+                    });
 
                     self.state = AppState::RunningRequest {
                         handle,
@@ -368,7 +380,11 @@ impl App {
     }
 }
 
-async fn make_request(buf: &str) -> Result<(String, String)> {
+async fn make_request(
+    buf: &str,
+    root_dir: &Path,
+    file_path: &Path,
+) -> Result<(String, String)> {
     let client = build_client()?;
 
     let mut request = String::new();
@@ -388,10 +404,10 @@ async fn make_request(buf: &str) -> Result<(String, String)> {
     if let Ok(json) = res.json::<serde_json::Value>().await {
         writeln!(response, "{}", serde_json::to_string_pretty(&json)?)?;
 
-        // let options = vec![];
-        // let env = load_env(&root_dir, &path, &options)?;
-        // let vars = extract_variables(&json, &env)?;
-        // update_data(&vars)?;
+        let options = vec![];
+        let env = load_env(root_dir, file_path, &options)?;
+        let vars = extract_variables(&json, &env)?;
+        update_data(&vars)?;
     }
 
     Ok((request, response))
