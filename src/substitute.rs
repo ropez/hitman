@@ -2,22 +2,13 @@ use std::str;
 use thiserror::Error;
 use toml::{Table, Value};
 
-#[derive(Debug, Clone)]
-pub struct PendingSubstitution {
-    pub key: String,
-    pub substitution_type: SubstitutionType,
-}
-
-#[derive(Debug, Clone)]
-pub enum SubstitutionType {
-    Prompt { fallback: Option<String> },
-    Select { values: Vec<toml::Value> },
-}
-
 #[derive(Error, Debug, Clone)]
 pub enum SubstituteError {
-    #[error("Missing substitution for {0:?}")]
-    ReplacementNotFound(PendingSubstitution),
+    #[error("Missing substitution value for {key}")]
+    ValueNotFound { key: String, fallback: Option<String> },
+
+    #[error("Found multiple possible substitutions for {key}")]
+    MultipleValuesFound { key: String, values: Vec<toml::Value> },
 
     #[error("Syntax error")]
     SyntaxError,
@@ -78,7 +69,10 @@ fn valid_character(c: &char) -> bool {
     c.is_ascii_alphabetic() || c.is_ascii_digit() || *c == '_'
 }
 
-fn find_replacement(placeholder: &str, env: &Table) -> SubstituteResult<String> {
+fn find_replacement(
+    placeholder: &str,
+    env: &Table,
+) -> SubstituteResult<String> {
     let mut parts = placeholder.split('|');
 
     let key = parts.next().unwrap_or("").trim();
@@ -91,20 +85,20 @@ fn find_replacement(placeholder: &str, env: &Table) -> SubstituteResult<String> 
         Some(Value::Integer(v)) => Ok(parse(&v.to_string())),
         Some(Value::Float(v)) => Ok(parse(&v.to_string())),
         Some(Value::Boolean(v)) => Ok(parse(&v.to_string())),
-        Some(Value::Array(arr)) => Err(SubstituteError::ReplacementNotFound(PendingSubstitution {
-            key: parsed_key,
-            substitution_type: SubstitutionType::Select {
+        Some(Value::Array(arr)) => {
+            Err(SubstituteError::MultipleValuesFound {
+                key: parsed_key,
                 values: arr.clone(),
-            },
-        })),
+            })
+        }
         Some(_) => Err(SubstituteError::TypeNotSupported),
         None => {
             let fallback = parts.next().map(|fb| fb.trim().to_string());
 
-            Err(SubstituteError::ReplacementNotFound(PendingSubstitution {
+            Err(SubstituteError::ValueNotFound {
                 key: parsed_key,
-                substitution_type: SubstitutionType::Prompt { fallback },
-            }))
+                fallback,
+            })
         }
     }
 }
@@ -244,7 +238,8 @@ mod tests {
     #[test]
     fn substitutes_variable_on_the_same_line_in_list() {
         let env = create_env();
-        let res = substitute("foo: [{{ \"url\" }}, {{ \"integer\" }}]", &env).unwrap();
+        let res = substitute("foo: [{{ \"url\" }}, {{ \"integer\" }}]", &env)
+            .unwrap();
 
         assert_eq!(&res, "foo: [\"example.com\", \"42\"]\n");
     }
