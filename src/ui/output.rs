@@ -29,21 +29,14 @@ impl StatefulWidget for OutputView {
     }
 }
 
+#[derive(Default)]
 pub struct OutputViewState {
     request: String,
     response: String,
     scroll: (u16, u16),
 }
 
-impl Default for OutputViewState {
-    fn default() -> Self {
-        Self {
-            request: String::default(),
-            response: String::default(),
-            scroll: (0, 0),
-        }
-    }
-}
+
 
 impl OutputViewState {
     pub fn update(&mut self, request: String, response: String) {

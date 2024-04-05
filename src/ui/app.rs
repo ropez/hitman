@@ -67,14 +67,14 @@ impl App {
         let reqs: Vec<String> = reqs
             .iter()
             .filter_map(|p| p.to_str())
-            .map(|s| String::from(s))
+            .map(String::from)
             .collect();
 
         let request_selector = RequestSelector::new(&reqs);
         let output_state = OutputViewState::default();
 
         Ok(Self {
-            root_dir: root_dir.into(),
+            root_dir,
             request_selector,
             output_state,
             state: AppState::Idle,
@@ -125,7 +125,7 @@ impl App {
         self.render_left(frame, layout[0]);
 
         frame.render_stateful_widget(
-            OutputView::default(),
+            OutputView,
             layout[1],
             &mut self.output_state,
         );
@@ -309,7 +309,7 @@ impl App {
                 match pending_state {
                     PendingState::Prompt { component } => {
                         let value = component.value();
-                        pending_options.push((key.clone(), value.into()));
+                        pending_options.push((key.clone(), value));
                     }
                     PendingState::Select { component } => {
                         if let Some(selected) = component.selected_item() {
@@ -328,7 +328,7 @@ impl App {
                 }
             }
 
-            let path = PathBuf::try_from(file_path)?;
+            let path = PathBuf::from(file_path);
             let env = load_env(&root_dir, &path, &pending_options)?;
 
             match substitute(&read_to_string(path)?, &env) {
@@ -386,7 +386,7 @@ async fn make_request(buf: &str) -> Result<(String, String)> {
     }
     writeln!(request)?;
 
-    let (res, _elapsed) = do_request(&client, &buf).await?;
+    let (res, _elapsed) = do_request(&client, buf).await?;
 
     let mut response = String::new();
     for (name, value) in res.headers() {
