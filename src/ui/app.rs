@@ -21,6 +21,7 @@ use hitman::{
 
 use super::{
     output::{OutputView, OutputViewState},
+    prompt::Prompt,
     select::{Component, RequestSelector, Select, SelectItem},
 };
 
@@ -33,7 +34,7 @@ pub struct App {
 }
 
 pub enum AppState {
-    Normal,
+    Idle,
 
     PendingValue {
         key: String,
@@ -52,7 +53,7 @@ pub enum AppState {
 }
 
 pub enum PendingState {
-    Prompt { fallback: Option<String> },
+    Prompt { component: Prompt },
     Select { component: Select<Value> },
 }
 
@@ -76,7 +77,7 @@ impl App {
             root_dir: root_dir.into(),
             request_selector,
             output_state,
-            state: AppState::Normal,
+            state: AppState::Idle,
         })
     }
 
@@ -92,7 +93,7 @@ impl App {
                 if handle.is_finished() {
                     let (request, response) = handle.await??;
                     self.output_state.update(request, response);
-                    self.state = AppState::Normal;
+                    self.state = AppState::Idle;
                 }
             }
 
@@ -143,30 +144,17 @@ impl App {
     fn render_popup(&mut self, frame: &mut Frame) {
         let area = frame.size();
         match &mut self.state {
-            AppState::PendingValue {
-                key,
-                pending_state,
-                // ref mut select_state,
-                ..
-            } => {
-                match pending_state {
-                    PendingState::Prompt { fallback, .. } => {
-                        // TODO: Check out using tui-input
-
-                        let inner_area = area.inner(&Margin::new(42, 10));
-                        frame.render_widget(Clear, inner_area);
-                        frame.render_widget(
-                            Block::bordered()
-                                .title(format!("Enter value for {key}")),
-                            inner_area,
-                        );
-                    }
-                    PendingState::Select { component, .. } => {
-                        let inner_area = area.inner(&Margin::new(42, 10));
-                        component.render_ui(frame, inner_area);
-                    }
+            AppState::PendingValue { pending_state, .. } => match pending_state
+            {
+                PendingState::Prompt { component, .. } => {
+                    let inner_area = area.inner(&Margin::new(42, 10));
+                    component.render_ui(frame, inner_area);
                 }
-            }
+                PendingState::Select { component, .. } => {
+                    let inner_area = area.inner(&Margin::new(42, 10));
+                    component.render_ui(frame, inner_area);
+                }
+            },
 
             AppState::SelectEnvironment { component } => {
                 let inner_area = area.inner(&Margin::new(42, 10));
@@ -191,27 +179,27 @@ impl App {
     async fn handle_events(&mut self) -> Result<bool> {
         if event::poll(Duration::from_millis(50))? {
             let event = event::read()?;
-            match event {
-                Event::Key(key) if key.kind == KeyEventKind::Press => {
+            if let Event::Key(key) = event {
+                if key.kind == KeyEventKind::Press {
                     match &mut self.state {
                         AppState::PendingValue { pending_state, .. } => {
                             match pending_state {
-                                PendingState::Select { component, .. } => {
-                                    // XXX Pass the event and the state to a function,
-                                    // rather than calling a method on state?
+                                PendingState::Select { component } => {
                                     if component.handle_event(event) {
                                         return Ok(false);
                                     }
                                 }
-                                PendingState::Prompt { fallback, .. } => {
-                                    // TODO
+                                PendingState::Prompt { component } => {
+                                    if component.handle_event(event) {
+                                        return Ok(false);
+                                    }
                                 }
                             }
 
                             if key.modifiers.contains(KeyModifiers::CONTROL) {
                                 match key.code {
                                     KeyCode::Char('c') | KeyCode::Char('q') => {
-                                        self.state = AppState::Normal;
+                                        self.state = AppState::Idle;
                                     }
                                     _ => (),
                                 }
@@ -225,7 +213,7 @@ impl App {
                             }
                         }
 
-                        AppState::Normal => {
+                        AppState::Idle => {
                             if self.request_selector.handle_event(event) {
                                 return Ok(false);
                             }
@@ -275,7 +263,7 @@ impl App {
                                 match key.code {
                                     KeyCode::Char('c') | KeyCode::Char('q') => {
                                         handle.abort();
-                                        self.state = AppState::Normal;
+                                        self.state = AppState::Idle;
                                     }
                                     _ => (),
                                 }
@@ -290,7 +278,7 @@ impl App {
                             if key.modifiers.contains(KeyModifiers::CONTROL) {
                                 match key.code {
                                     KeyCode::Char('c') | KeyCode::Char('q') => {
-                                        self.state = AppState::Normal;
+                                        self.state = AppState::Idle;
                                     }
                                     _ => (),
                                 }
@@ -298,7 +286,6 @@ impl App {
                         }
                     }
                 }
-                _ => (),
             }
         }
         Ok(false)
@@ -320,9 +307,8 @@ impl App {
             } = &self.state
             {
                 match pending_state {
-                    PendingState::Prompt { fallback, .. } => {
-                        // TODO: Input
-                        let value = fallback.as_deref().unwrap_or("");
+                    PendingState::Prompt { component } => {
+                        let value = component.value();
                         pending_options.push((key.clone(), value.into()));
                     }
                     PendingState::Select { component } => {
@@ -369,12 +355,17 @@ impl App {
                         };
                     }
                     SubstituteError::ValueNotFound { key, fallback } => {
+                        let component =
+                            Prompt::new(format!("Enter value for {key}"));
+                        let component = if let Some(value) = fallback.clone() {
+                            component.with_value(value)
+                        } else {
+                            component
+                        };
                         self.state = AppState::PendingValue {
                             key,
                             pending_options,
-                            pending_state: PendingState::Prompt {
-                                fallback: fallback.clone(),
-                            },
+                            pending_state: PendingState::Prompt { component },
                         };
                     }
                     e => bail!(e),
