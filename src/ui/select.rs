@@ -11,6 +11,7 @@ use ratatui::{
     },
     Frame,
 };
+use tui_input::{Input, backend::crossterm::EventHandler};
 
 pub trait Component {
     fn render_ui(&mut self, frame: &mut Frame, area: Rect);
@@ -90,7 +91,7 @@ where
     title: String,
     items: Vec<T>,
     list_state: ListState,
-    search: String,
+    search_input: Input,
 }
 
 impl<T> Select<T>
@@ -102,7 +103,7 @@ where
             title,
             items,
             list_state: ListState::default().with_selected(Some(0)),
-            search: String::new(),
+            search_input: Input::default(),
         }
     }
 }
@@ -141,7 +142,8 @@ where
     }
 
     fn get_filtered_items<'a>(&self) -> Vec<(&T, Option<Vec<usize>>)> {
-        if self.search.is_empty() {
+        let term = self.search_input.value();
+        if term.is_empty() {
             self.items.iter().map(|i| (i, None)).collect()
         } else {
             let matcher = SkimMatcherV2::default();
@@ -151,7 +153,7 @@ where
                 .iter()
                 .filter_map(|s| {
                     matcher
-                        .fuzzy(&s.text(), &self.search, true)
+                        .fuzzy(&s.text(), term, true)
                         .map(|(score, indexes)| (s, score, indexes))
                 })
                 .collect();
@@ -182,7 +184,7 @@ where
 
         let layout = Layout::new(
             Direction::Vertical,
-            [Constraint::Min(0), Constraint::Max(3)],
+            [Constraint::Min(0), Constraint::Length(3)],
         )
         .split(area);
 
@@ -200,27 +202,37 @@ where
 
         frame.render_stateful_widget(list, layout[0], &mut self.list_state);
 
+
+
+        let label = Span::from("  Search: ");
+        let cur = self.search_input.visual_cursor() + label.width();
         let text = Line::from(vec![
-            Span::from("  Search: "),
-            Span::from(self.search.clone()).yellow(),
+            label,
+            Span::from(self.search_input.value()).yellow(),
         ]);
-        let w = text.width() as u16;
-        frame.render_widget(
-            Paragraph::new(text).block(Block::bordered().border_set(
+        let block = Block::bordered().border_set(
                 symbols::border::Set {
                     top_left: symbols::border::PLAIN.vertical_right,
                     top_right: symbols::border::PLAIN.vertical_left,
                     ..symbols::border::PLAIN
                 },
-            )),
+            );
+        let inner = block.inner(layout[1]);
+        frame.render_widget(
+            Paragraph::new(text).block(block),
             layout[1],
         );
 
-        // FIXME: Use tui-input to calculate cursor pos
-        frame.set_cursor(layout[1].x + w + 1, layout[1].y + 1);
+        frame.set_cursor(inner.x + cur as u16, inner.y);
     }
 
     fn handle_event(&mut self, event: Event) -> bool {
+        if let Some(change) = self.search_input.handle_event(&event) {
+            if change.value {
+                self.select_first();
+            }
+        }
+
         if let Event::Key(key) = event {
             if key.modifiers.contains(KeyModifiers::CONTROL) {
                 match key.code {
@@ -230,10 +242,6 @@ where
                     }
                     KeyCode::Char('k') => {
                         self.select_prev();
-                        true
-                    }
-                    KeyCode::Char('w') => {
-                        self.search.clear();
                         true
                     }
                     _ => false,
@@ -246,21 +254,6 @@ where
                     }
                     KeyCode::Up => {
                         self.select_prev();
-                        true
-                    }
-                    KeyCode::Char(ch) => {
-                        if self.search.len() < 24 {
-                            self.search.push(ch);
-                            self.select_first();
-                        }
-                        true
-                    }
-                    KeyCode::Backspace => {
-                        self.search.pop();
-                        true
-                    }
-                    KeyCode::Esc => {
-                        self.search.clear();
                         true
                     }
                     _ => false,
