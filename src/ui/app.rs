@@ -4,15 +4,10 @@ use anyhow::{bail, Context, Result};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::{
     backend::Backend,
-    buffer::Buffer,
     layout::{Constraint, Direction, Layout, Margin, Rect},
     style::{Style, Stylize},
-    symbols,
-    text::{Line, Span},
-    widgets::{
-        Block, BorderType, Clear, List, Paragraph, StatefulWidget, Widget,
-    },
-    Terminal,
+    widgets::{Block, BorderType, Clear, List, Paragraph},
+    Frame, Terminal,
 };
 use serde_json::Value;
 
@@ -26,14 +21,13 @@ use tokio::task::JoinHandle;
 
 use super::{
     output::{OutputView, OutputViewState},
-    select::{RequestSelector, RequestSelectorState, Select, SelectState},
+    select::{Component, RequestSelector, Select},
 };
 
 pub struct App {
     root_dir: PathBuf,
-    selector_state: RequestSelectorState,
+    request_selector: RequestSelector,
     output_state: OutputViewState,
-    search: String, // Move into selector_state
 
     state: AppState,
 }
@@ -61,7 +55,7 @@ pub enum PendingState {
     },
     Select {
         values: Vec<toml::Value>,
-        select_state: SelectState,
+        component: Select,
     },
 }
 
@@ -76,14 +70,13 @@ impl App {
             .map(|s| String::from(s))
             .collect();
 
-        let selector_state = RequestSelectorState::new(&reqs);
+        let request_selector = RequestSelector::new(&reqs);
         let output_state = OutputViewState::default();
 
         Ok(Self {
             root_dir: root_dir.into(),
-            selector_state,
+            request_selector,
             output_state,
-            search: String::new(),
             state: AppState::Normal,
         })
     }
@@ -94,16 +87,7 @@ impl App {
     {
         let mut should_quit = false;
         while !should_quit {
-            terminal.draw(|frame| {
-                self.render(frame.size(), frame.buffer_mut());
-
-                // XXX Coupling
-                // Check out tui-input
-                frame.set_cursor(
-                    frame.size().x + 11 + self.search.len() as u16,
-                    frame.size().y + frame.size().height - 3,
-                );
-            })?;
+            terminal.draw(|frame| self.render(frame))?;
 
             if let AppState::RunningRequest { handle } = &mut self.state {
                 if handle.is_finished() {
@@ -119,74 +103,46 @@ impl App {
         Ok(())
     }
 
-    fn render(&mut self, area: Rect, buf: &mut Buffer) {
+    fn render(&mut self, frame: &mut Frame) {
         let layout = Layout::new(
             Direction::Vertical,
             [Constraint::Min(0), Constraint::Length(1)],
         )
-        .split(area);
+        .split(frame.size());
 
-        self.render_main(layout[0], buf);
-        self.render_status(layout[1], buf);
-        self.render_popup(area, buf);
+        self.render_main(frame, layout[0]);
+        self.render_status(frame, layout[1]);
+        self.render_popup(frame);
     }
 
-    fn render_main(&mut self, area: Rect, buf: &mut Buffer) {
+    fn render_main(&mut self, frame: &mut Frame, area: Rect) {
         let layout = Layout::new(
             Direction::Horizontal,
             [Constraint::Max(60), Constraint::Min(1)],
         )
         .split(area);
 
-        self.render_left(layout[0], buf);
+        self.render_left(frame, layout[0]);
 
-        StatefulWidget::render(
+        frame.render_stateful_widget(
             OutputView::default(),
             layout[1],
-            buf,
             &mut self.output_state,
         );
     }
 
-    fn render_left(&mut self, area: Rect, buf: &mut Buffer) {
-        let layout = Layout::new(
-            Direction::Vertical,
-            [Constraint::Min(0), Constraint::Max(3)],
-        )
-        .split(area);
-
-        // XXX Consider passing items to widget instance, instead of using state
-        StatefulWidget::render(
-            RequestSelector::new(&self.search),
-            layout[0],
-            buf,
-            &mut self.selector_state,
-        );
-
-        Widget::render(
-            Paragraph::new(Line::from(vec![
-                Span::from("  Search: "),
-                Span::from(self.search.clone()).yellow(),
-            ]))
-            .block(Block::bordered().border_set(
-                symbols::border::Set {
-                    top_left: symbols::border::PLAIN.vertical_right,
-                    top_right: symbols::border::PLAIN.vertical_left,
-                    ..symbols::border::PLAIN
-                },
-            )),
-            layout[1],
-            buf,
-        );
+    fn render_left(&mut self, frame: &mut Frame, area: Rect) {
+        self.request_selector.render_ui(frame, area);
     }
 
-    fn render_status(&mut self, area: Rect, buf: &mut Buffer) {
+    fn render_status(&mut self, frame: &mut Frame, area: Rect) {
         let status_line = Paragraph::new("S: Select environment")
             .style(Style::new().dark_gray());
-        status_line.render(area, buf);
+        frame.render_widget(status_line, area);
     }
 
-    fn render_popup(&mut self, area: Rect, buf: &mut Buffer) {
+    fn render_popup(&mut self, frame: &mut Frame) {
+        let area = frame.size();
         match &mut self.state {
             AppState::PendingValue {
                 key,
@@ -199,32 +155,16 @@ impl App {
                         // TODO: Check out using tui-input
 
                         let inner_area = area.inner(&Margin::new(42, 10));
-                        Widget::render(Clear, inner_area, buf);
-                        Widget::render(
+                        frame.render_widget(Clear, inner_area);
+                        frame.render_widget(
                             Block::bordered()
                                 .title(format!("Enter value for {key}")),
                             inner_area,
-                            buf,
                         );
                     }
-                    PendingState::Select {
-                        values,
-                        select_state,
-                    } => {
-                        let select = Select::default().block(
-                            Block::bordered().title(format!(
-                                "Select substitution value for {{{{{key}}}}}"
-                            )),
-                        );
-
+                    PendingState::Select { component, .. } => {
                         let inner_area = area.inner(&Margin::new(42, 10));
-                        Widget::render(Clear, inner_area, buf);
-                        StatefulWidget::render(
-                            select,
-                            inner_area,
-                            buf,
-                            select_state,
-                        );
+                        component.render_ui(frame, inner_area);
                     }
                 }
             }
@@ -239,19 +179,19 @@ impl App {
                     .style(Style::new().white().on_blue());
 
                 let inner_area = area.inner(&Margin::new(42, 10));
-                Widget::render(Clear, inner_area, buf);
-                Widget::render(list, inner_area, buf);
+                frame.render_widget(Clear, inner_area);
+                frame.render_widget(list, inner_area);
             }
 
             AppState::RunningRequest { .. } => {
-                // TODO: Stateful progress spinner widget
+                // TODO: Progress spinner component
                 let loading = Paragraph::new("...waiting...")
                     .centered()
                     .block(Block::bordered().border_type(BorderType::Rounded));
 
                 let inner_area = area.inner(&Margin::new(72, 15));
-                Widget::render(Clear, inner_area, buf);
-                Widget::render(loading, inner_area, buf);
+                frame.render_widget(Clear, inner_area);
+                frame.render_widget(loading, inner_area);
             }
 
             _ => (),
@@ -266,12 +206,10 @@ impl App {
                     match &mut self.state {
                         AppState::PendingValue { pending_state, .. } => {
                             match pending_state {
-                                PendingState::Select {
-                                    select_state, ..
-                                } => {
+                                PendingState::Select { component, .. } => {
                                     // XXX Pass the event and the state to a function,
                                     // rather than calling a method on state?
-                                    if select_state.handle_event(event) {
+                                    if component.handle_event(event) {
                                         return Ok(false);
                                     }
                                 }
@@ -298,25 +236,20 @@ impl App {
                         }
 
                         AppState::Normal => {
+                            if self.request_selector.handle_event(event) {
+                                return Ok(false);
+                            }
+
                             if key.modifiers.contains(KeyModifiers::CONTROL) {
                                 match key.code {
                                     KeyCode::Char('c') | KeyCode::Char('q') => {
                                         return Ok(true);
-                                    }
-                                    KeyCode::Char('j') => {
-                                        self.selector_state.select_next();
-                                    }
-                                    KeyCode::Char('k') => {
-                                        self.selector_state.select_prev();
                                     }
                                     KeyCode::Char('p') => {
                                         self.output_state.scroll_up();
                                     }
                                     KeyCode::Char('n') => {
                                         self.output_state.scroll_down();
-                                    }
-                                    KeyCode::Char('w') => {
-                                        self.search.clear();
                                     }
                                     KeyCode::Char('s') => {
                                         self.state =
@@ -326,24 +259,6 @@ impl App {
                                 }
                             } else {
                                 match key.code {
-                                    KeyCode::Down => {
-                                        self.selector_state.select_next();
-                                    }
-                                    KeyCode::Up => {
-                                        self.selector_state.select_prev();
-                                    }
-                                    KeyCode::Char(ch) => {
-                                        if self.search.len() < 24 {
-                                            self.search.push(ch);
-                                            self.selector_state.select_first();
-                                        }
-                                    }
-                                    KeyCode::Backspace => {
-                                        self.search.pop();
-                                    }
-                                    KeyCode::Esc => {
-                                        self.search.clear();
-                                    }
                                     KeyCode::Enter => {
                                         self.try_request()?;
                                     }
@@ -383,7 +298,7 @@ impl App {
     }
 
     fn try_request(&mut self) -> Result<(), anyhow::Error> {
-        if let Some(file_path) = self.selector_state.selected_path() {
+        if let Some(file_path) = self.request_selector.selected_path() {
             let root_dir = self.root_dir.clone();
 
             let mut pending_options = match &self.state {
@@ -405,9 +320,9 @@ impl App {
                     }
                     PendingState::Select {
                         values,
-                        select_state,
+                        component: select_component,
                     } => {
-                        if let Some(selected) = select_state.selected() {
+                        if let Some(selected) = select_component.selected() {
                             let value = match &values[selected] {
                                 toml::Value::Table(t) => match t.get("value") {
                                     Some(toml::Value::String(value)) => {
@@ -439,9 +354,9 @@ impl App {
                     SubstituteError::ReplacementNotFound(not_found) => {
                         match &not_found.substitution_type {
                             SubstitutionType::Select { values } => {
-                                // FIXME: We need to keep the 'values' in state,
-                                // so it doesn't make sense to prematurely
-                                // convert map to strings here
+                                // FIXME: We some redundency in the state. Can
+                                // we somehow make the Select component hold on
+                                // to the `values`, and use something like Into<String>?
                                 let items = values.iter().map(|v| match v {
                                     toml::Value::Table(t) => {
                                         match t.get("name") {
@@ -455,14 +370,17 @@ impl App {
                                     other => other.to_string(),
                                 });
 
+                                let select = Select::new(
+                                    format!("Select substitution value for {{{{{}}}}}", &not_found.key),
+                                    items.collect(),
+                                );
+
                                 self.state = AppState::PendingValue {
                                     key: not_found.key,
                                     pending_options,
                                     pending_state: PendingState::Select {
                                         values: values.clone(),
-                                        select_state: SelectState::new(
-                                            items.collect(),
-                                        ),
+                                        component: select,
                                     },
                                 };
                             }
