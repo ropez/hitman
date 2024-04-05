@@ -87,7 +87,7 @@ impl App {
     {
         let mut should_quit = false;
         while !should_quit {
-            terminal.draw(|frame| self.render(frame))?;
+            terminal.draw(|frame| self.render_ui(frame))?;
 
             if let AppState::RunningRequest { handle } = &mut self.state {
                 if handle.is_finished() {
@@ -103,7 +103,7 @@ impl App {
         Ok(())
     }
 
-    fn render(&mut self, frame: &mut Frame) {
+    fn render_ui(&mut self, frame: &mut Frame) {
         let layout = Layout::new(
             Direction::Vertical,
             [Constraint::Min(0), Constraint::Length(1)],
@@ -322,6 +322,7 @@ impl App {
                         values,
                         component: select_component,
                     } => {
+                        // FIXME: Index is not correct when filtered
                         if let Some(selected) = select_component.selected() {
                             let value = match &values[selected] {
                                 toml::Value::Table(t) => match t.get("value") {
