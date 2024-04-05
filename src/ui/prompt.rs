@@ -6,7 +6,7 @@ use ratatui::{
 };
 use tui_input::{backend::crossterm::EventHandler, Input};
 
-use super::select::Component;
+use super::Component;
 
 pub struct Prompt {
     title: String,
@@ -61,7 +61,7 @@ impl Component for Prompt {
         frame.set_cursor(inner.x + self.input.visual_cursor() as u16, inner.y);
     }
 
-    fn handle_event(&mut self, event: Event) -> bool {
+    fn handle_event(&mut self, event: &Event) -> bool {
         // TODO: Follow this pattern in our components:
         // Return a "StateChanged" option form event handlers.
 
@@ -71,7 +71,7 @@ impl Component for Prompt {
             }
         }
 
-        if let Some(state_changed) = self.input.handle_event(&event) {
+        if let Some(state_changed) = self.input.handle_event(event) {
             self.has_value = state_changed.value;
         }
         true

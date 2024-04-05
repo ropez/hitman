@@ -13,10 +13,7 @@ use ratatui::{
 };
 use tui_input::{Input, backend::crossterm::EventHandler};
 
-pub trait Component {
-    fn render_ui(&mut self, frame: &mut Frame, area: Rect);
-    fn handle_event(&mut self, event: Event) -> bool;
-}
+use super::Component;
 
 #[derive(Default)]
 pub struct RequestSelector {
@@ -42,7 +39,7 @@ impl Component for RequestSelector {
         self.selector.render_ui(frame, area);
     }
 
-    fn handle_event(&mut self, event: Event) -> bool {
+    fn handle_event(&mut self, event: &Event) -> bool {
         self.selector.handle_event(event)
     }
 }
@@ -226,8 +223,8 @@ where
         frame.set_cursor(inner.x + cur as u16, inner.y);
     }
 
-    fn handle_event(&mut self, event: Event) -> bool {
-        if let Some(change) = self.search_input.handle_event(&event) {
+    fn handle_event(&mut self, event: &Event) -> bool {
+        if let Some(change) = self.search_input.handle_event(event) {
             if change.value {
                 self.select_first();
             }
