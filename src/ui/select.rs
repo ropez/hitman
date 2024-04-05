@@ -1,32 +1,46 @@
 use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
 use fuzzy_matcher::skim::SkimMatcherV2;
 use ratatui::{
-    buffer::Buffer,
-    layout::Rect,
+    layout::{Constraint, Direction, Layout, Rect},
     style::{Style, Stylize},
+    symbols,
     text::{Line, Span},
-    widgets::{Block, Borders, HighlightSpacing, List, ListState, StatefulWidget},
+    widgets::{
+        Block, Borders, Clear, HighlightSpacing, List, ListState, Paragraph,
+    },
+    Frame,
 };
 
-#[derive(Default)]
-pub struct RequestSelector<'l> {
-    search: &'l str,
+pub trait Component {
+    fn render_ui(&mut self, frame: &mut Frame, area: Rect);
+    fn handle_event(&mut self, event: Event) -> bool;
 }
 
-impl<'l> RequestSelector<'l> {
-    pub fn new(search: &'l str) -> Self {
-        Self { search }
+#[derive(Default)]
+pub struct RequestSelector {
+    search: String,
+    items: Vec<String>,
+    list_state: ListState,
+}
+
+impl RequestSelector {
+    pub fn new(reqs: &[String]) -> Self {
+        Self {
+            search: String::new(),
+            items: reqs.into_iter().map(|a| String::from(a)).collect(),
+            list_state: ListState::default().with_selected(Some(0)),
+        }
     }
 
-    fn get_list_items<'a>(&self, state: &RequestSelectorState) -> Vec<Line<'a>> {
+    fn get_list_items<'a>(&self) -> Vec<Line<'a>> {
         if self.search.is_empty() {
-            state.items.iter().map(|s| Line::from(s.clone())).collect()
+            self.items.iter().map(|s| Line::from(s.clone())).collect()
         } else {
             let matcher = SkimMatcherV2::default();
 
             // FIXME: Don't include '.http' in fuzzy match
 
-            let mut items: Vec<_> = state
+            let mut items: Vec<_> = self
                 .items
                 .iter()
                 .filter_map(|s| {
@@ -44,13 +58,44 @@ impl<'l> RequestSelector<'l> {
                 .collect()
         }
     }
+
+    pub fn select_first(&mut self) {
+        self.list_state.select(Some(0));
+    }
+
+    pub fn select_next(&mut self) {
+        let len = self.get_list_items().len();
+        match self.list_state.selected() {
+            None => self.list_state.select(Some(0)),
+            Some(i) => self.list_state.select(Some((i + 1) % len)),
+        }
+    }
+
+    pub fn select_prev(&mut self) {
+        let len = self.get_list_items().len();
+        match self.list_state.selected() {
+            None => self.list_state.select(Some(len - 1)),
+            Some(i) => self.list_state.select(Some((len + i - 1) % len)),
+        }
+    }
+
+    pub fn selected_path(&self) -> Option<&String> {
+        match self.list_state.selected() {
+            Some(i) => self.items.get(i),
+            None => None,
+        }
+    }
 }
 
-impl<'l> StatefulWidget for RequestSelector<'l> {
-    type State = RequestSelectorState;
+impl Component for RequestSelector {
+    fn render_ui(&mut self, frame: &mut Frame, area: Rect) {
+        let layout = Layout::new(
+            Direction::Vertical,
+            [Constraint::Min(0), Constraint::Max(3)],
+        )
+        .split(area);
 
-    fn render(self, area: Rect, buf: &mut Buffer, state: &mut Self::State) {
-        let list_items = self.get_list_items(state);
+        let list_items = self.get_list_items();
 
         let list = List::new(list_items)
             .block(
@@ -62,7 +107,77 @@ impl<'l> StatefulWidget for RequestSelector<'l> {
             .highlight_symbol("> ")
             .highlight_spacing(HighlightSpacing::Always);
 
-        list.render(area, buf, &mut state.list_state);
+        frame.render_stateful_widget(list, layout[0], &mut self.list_state);
+
+        let text = Line::from(vec![
+            Span::from("  Search: "),
+            Span::from(self.search.clone()).yellow(),
+        ]);
+        let w = text.width() as u16;
+        frame.render_widget(
+            Paragraph::new(text).block(Block::bordered().border_set(
+                symbols::border::Set {
+                    top_left: symbols::border::PLAIN.vertical_right,
+                    top_right: symbols::border::PLAIN.vertical_left,
+                    ..symbols::border::PLAIN
+                },
+            )),
+            layout[1],
+        );
+
+        // FIXME: Use tui-input to calculate cursor pos
+        frame.set_cursor(layout[1].x + w + 1, layout[1].y + 1);
+    }
+
+    fn handle_event(&mut self, event: Event) -> bool {
+        if let Event::Key(key) = event {
+            if key.modifiers.contains(KeyModifiers::CONTROL) {
+                match key.code {
+                    KeyCode::Char('j') => {
+                        self.select_next();
+                        true
+                    }
+                    KeyCode::Char('k') => {
+                        self.select_prev();
+                        true
+                    }
+                    KeyCode::Char('w') => {
+                        self.search.clear();
+                        true
+                    }
+                    _ => false,
+                }
+            } else {
+                match key.code {
+                    KeyCode::Down => {
+                        self.select_next();
+                        true
+                    }
+                    KeyCode::Up => {
+                        self.select_prev();
+                        true
+                    }
+                    KeyCode::Char(ch) => {
+                        if self.search.len() < 24 {
+                            self.search.push(ch);
+                            self.select_first();
+                        }
+                        true
+                    }
+                    KeyCode::Backspace => {
+                        self.search.pop();
+                        true
+                    }
+                    KeyCode::Esc => {
+                        self.search.clear();
+                        true
+                    }
+                    _ => false,
+                }
+            }
+        } else {
+            false
+        }
     }
 }
 
@@ -83,108 +198,29 @@ fn format_item<'a>(text: String, indexes: Vec<usize>) -> Line<'a> {
     )
 }
 
-pub struct RequestSelectorState {
-    items: Vec<String>,
-    list_state: ListState,
-}
-
-impl RequestSelectorState {
-    pub fn new(reqs: &[String]) -> Self {
-        Self {
-            items: reqs.into_iter().map(|a| String::from(a)).collect(),
-            list_state: ListState::default().with_selected(Some(0)),
-        }
-    }
-
-    pub fn select_first(&mut self) {
-        self.list_state.select(Some(0));
-    }
-
-    pub fn select_next(&mut self) {
-        // FIXME: Can select outside filtered range,
-        // should probably constraint during rendering
-        let len = self.items.len();
-        match self.list_state.selected() {
-            None => self.list_state.select(Some(0)),
-            Some(i) => self.list_state.select(Some((i + 1) % len)),
-        }
-    }
-
-    pub fn select_prev(&mut self) {
-        let len = self.items.len();
-        match self.list_state.selected() {
-            None => self.list_state.select(Some(len - 1)),
-            Some(i) => self.list_state.select(Some((len + i - 1) % len)),
-        }
-    }
-
-    pub fn selected_path(&self) -> Option<&String> {
-        match self.list_state.selected() {
-            Some(i) => self.items.get(i),
-            None => None,
-        }
-    }
-}
-
 #[derive(Default)]
-pub struct Select<'a> {
-    block: Option<Block<'a>>,
-}
-
-// FIXME: Derive setters
-impl<'a> Select<'a> {
-    #[must_use]
-    pub fn block(mut self, block: Block<'a>) -> Select<'a> {
-        self.block = Some(block);
-        self
-    }
-}
-
-impl StatefulWidget for Select<'_> {
-    type State = SelectState;
-
-    fn render(self, area: Rect, buf: &mut Buffer, state: &mut Self::State) {
-        let list_items = state.items.clone();
-
-        let list = List::new(list_items)
-            .highlight_style(Style::new().reversed())
-            .highlight_symbol("> ")
-            .highlight_spacing(HighlightSpacing::Always);
-
-        let list = if let Some(block) = self.block {
-            list.block(block)
-        } else {
-            list
-        };
-
-        list.render(area, buf, &mut state.list_state);
-    }
-}
-
-pub struct SelectState {
+pub struct Select {
+    title: String,
     items: Vec<String>,
     list_state: ListState,
 }
 
-impl SelectState {
-    pub fn new(items: Vec<String>) -> Self {
+impl Select {
+    pub fn new(title: String, items: Vec<String>) -> Self {
         Self {
+            title,
             items,
             list_state: ListState::default().with_selected(Some(0)),
         }
     }
+}
 
+impl Select {
     pub fn selected(&self) -> Option<usize> {
         self.list_state.selected()
     }
 
-    pub fn selected_value(&self) -> Option<String> {
-        self.selected().map(|i| self.items[i].clone())
-    }
-
     pub fn select_next(&mut self) {
-        // FIXME: Can select outside filtered range,
-        // should probably constraint during rendering
         let len = self.items.len();
         match self.list_state.selected() {
             None => self.list_state.select(Some(0)),
@@ -199,8 +235,24 @@ impl SelectState {
             Some(i) => self.list_state.select(Some((len + i - 1) % len)),
         }
     }
+}
 
-    pub fn handle_event(&mut self, event: Event) -> bool {
+impl Component for Select {
+    fn render_ui(&mut self, frame: &mut Frame, area: Rect) {
+        frame.render_widget(Clear, area);
+
+        let list_items = self.items.clone();
+
+        let list = List::new(list_items)
+            .highlight_style(Style::new().reversed())
+            .highlight_symbol("> ")
+            .highlight_spacing(HighlightSpacing::Always)
+            .block(Block::bordered().title(self.title.clone()));
+
+        frame.render_stateful_widget(list, area, &mut self.list_state);
+    }
+
+    fn handle_event(&mut self, event: Event) -> bool {
         match event {
             Event::Key(key) if key.kind == KeyEventKind::Press => {
                 if key.modifiers.contains(KeyModifiers::CONTROL) {
