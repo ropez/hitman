@@ -13,22 +13,22 @@ use tokio::task::JoinHandle;
 use toml::Value;
 
 use hitman::{
-    env::{find_available_requests, find_root_dir, load_env, update_data},
-    extract::extract_variables,
+    env::{find_available_requests, find_root_dir, load_env},
     request::{build_client, do_request},
     substitute::{substitute, SubstituteError},
 };
 
 use super::{
-    output::{OutputView, OutputViewState},
+    output::OutputView,
     prompt::Prompt,
-    select::{Component, RequestSelector, Select, SelectItem},
+    select::{RequestSelector, Select, SelectItem},
+    Component,
 };
 
 pub struct App {
     root_dir: PathBuf,
     request_selector: RequestSelector,
-    output_state: OutputViewState,
+    output_view: OutputView,
 
     state: AppState,
 }
@@ -71,12 +71,11 @@ impl App {
             .collect();
 
         let request_selector = RequestSelector::new(&reqs);
-        let output_state = OutputViewState::default();
 
         Ok(Self {
             root_dir,
             request_selector,
-            output_state,
+            output_view: OutputView::default(),
             state: AppState::Idle,
         })
     }
@@ -92,7 +91,7 @@ impl App {
             if let AppState::RunningRequest { handle } = &mut self.state {
                 if handle.is_finished() {
                     let (request, response) = handle.await??;
-                    self.output_state.update(request, response);
+                    self.output_view.update(request, response);
                     self.state = AppState::Idle;
                 }
             }
@@ -124,11 +123,7 @@ impl App {
 
         self.render_left(frame, layout[0]);
 
-        frame.render_stateful_widget(
-            OutputView,
-            layout[1],
-            &mut self.output_state,
-        );
+        self.output_view.render_ui(frame, layout[1]);
     }
 
     fn render_left(&mut self, frame: &mut Frame, area: Rect) {
@@ -185,12 +180,12 @@ impl App {
                         AppState::PendingValue { pending_state, .. } => {
                             match pending_state {
                                 PendingState::Select { component } => {
-                                    if component.handle_event(event) {
+                                    if component.handle_event(&event) {
                                         return Ok(false);
                                     }
                                 }
                                 PendingState::Prompt { component } => {
-                                    if component.handle_event(event) {
+                                    if component.handle_event(&event) {
                                         return Ok(false);
                                     }
                                 }
@@ -214,7 +209,11 @@ impl App {
                         }
 
                         AppState::Idle => {
-                            if self.request_selector.handle_event(event) {
+                            if self.request_selector.handle_event(&event) {
+                                return Ok(false);
+                            }
+
+                            if self.output_view.handle_event(&event) {
                                 return Ok(false);
                             }
 
@@ -222,12 +221,6 @@ impl App {
                                 match key.code {
                                     KeyCode::Char('c') | KeyCode::Char('q') => {
                                         return Ok(true);
-                                    }
-                                    KeyCode::Char('p') => {
-                                        self.output_state.scroll_up();
-                                    }
-                                    KeyCode::Char('n') => {
-                                        self.output_state.scroll_down();
                                     }
                                     KeyCode::Char('s') => {
                                         let envs: Vec<String> = vec![
@@ -271,7 +264,7 @@ impl App {
                         }
 
                         AppState::SelectEnvironment { component } => {
-                            if component.handle_event(event) {
+                            if component.handle_event(&event) {
                                 return Ok(false);
                             }
 

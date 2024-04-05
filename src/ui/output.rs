@@ -1,44 +1,22 @@
+use crossterm::event::{Event, KeyCode, KeyModifiers};
 use ratatui::{
-    buffer::Buffer,
     layout::Rect,
     style::{Style, Stylize},
     text::{Line, Text},
-    widgets::{Block, Borders, Paragraph, StatefulWidget, Widget},
+    widgets::{Block, Borders, Paragraph},
+    Frame,
 };
 
-#[derive(Default)]
-pub struct OutputView;
-
-impl StatefulWidget for OutputView {
-    type State = OutputViewState;
-
-    fn render(self, area: Rect, buf: &mut Buffer, state: &mut Self::State) {
-        let blue = Style::new().blue();
-        let req_lines = state.request.lines().map(|line| Line::styled(line, blue));
-
-        let yellow = Style::new().yellow();
-        let res_lines = state.response.lines().map(|line| Line::styled(line, yellow));
-
-        let lines: Vec<Line> = req_lines.chain(res_lines).collect();
-
-        let para = Paragraph::new(Text::from(lines))
-            .scroll(state.scroll)
-            .block(Block::default().title("Output").borders(Borders::ALL));
-
-        para.render(area, buf);
-    }
-}
+use super::Component;
 
 #[derive(Default)]
-pub struct OutputViewState {
+pub struct OutputView {
     request: String,
     response: String,
     scroll: (u16, u16),
 }
 
-
-
-impl OutputViewState {
+impl OutputView {
     pub fn update(&mut self, request: String, response: String) {
         self.scroll = (0, 0);
         self.request = request;
@@ -55,5 +33,47 @@ impl OutputViewState {
 
     pub fn scroll_down(&mut self) {
         self.scroll.0 += 5;
+    }
+}
+
+impl Component for OutputView {
+    fn render_ui(&mut self, frame: &mut Frame, area: Rect) {
+        let blue = Style::new().blue();
+        let req_lines =
+            self.request.lines().map(|line| Line::styled(line, blue));
+
+        let yellow = Style::new().yellow();
+        let res_lines =
+            self.response.lines().map(|line| Line::styled(line, yellow));
+
+        let lines: Vec<Line> = req_lines.chain(res_lines).collect();
+
+        let para = Paragraph::new(Text::from(lines))
+            .scroll(self.scroll)
+            .block(Block::default().title("Output").borders(Borders::ALL));
+
+        frame.render_widget(para, area);
+    }
+
+    fn handle_event(&mut self, event: &Event) -> bool {
+        if let Event::Key(key) = event {
+            if key.modifiers.contains(KeyModifiers::CONTROL) {
+                match key.code {
+                    KeyCode::Char('p') => {
+                        self.scroll_up();
+                        true
+                    }
+                    KeyCode::Char('n') => {
+                        self.scroll_down();
+                        true
+                    }
+                    _ => false,
+                }
+            } else {
+                false
+            }
+        } else {
+            false
+        }
     }
 }
