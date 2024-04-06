@@ -34,7 +34,7 @@ impl Component for Progress {
             )
             .style(Style::new().yellow());
 
-        let inner_area = centered(area, 3, 18);
+        let inner_area = centered(area, 18, 3);
         frame.render_widget(Clear, inner_area);
         frame.render_widget(loading, inner_area);
     }

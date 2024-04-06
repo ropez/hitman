@@ -22,18 +22,18 @@ pub(crate) fn centered(area: Rect, w: u16, h: u16) -> Rect {
     let vl = Layout::new(
         Direction::Vertical,
         [
-            Constraint::Percentage(50),
-            Constraint::Length(w),
-            Constraint::Percentage(50),
+            Constraint::Min(0),
+            Constraint::Length(h),
+            Constraint::Min(0),
         ],
     )
     .split(area);
     let hl = Layout::new(
         Direction::Horizontal,
         [
-            Constraint::Percentage(50),
-            Constraint::Length(h),
-            Constraint::Percentage(50),
+            Constraint::Min(0),
+            Constraint::Length(w),
+            Constraint::Min(0),
         ],
     )
     .split(vl[1]);

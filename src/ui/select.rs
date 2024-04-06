@@ -28,7 +28,7 @@ impl RequestSelector {
         let items = Vec::from(reqs);
 
         Self {
-            selector: Select::new("Requests".into(), items),
+            selector: Select::new("Requests".into(), "Search".into(), items),
         }
     }
 
@@ -92,6 +92,7 @@ where
     T: SelectItem + Clone,
 {
     title: String,
+    prompt: String,
     items: Vec<T>,
     list_state: ListState,
     search_input: Input,
@@ -110,9 +111,10 @@ impl<T> Select<T>
 where
     T: SelectItem + Clone,
 {
-    pub fn new(title: String, items: Vec<T>) -> Self {
+    pub fn new(title: String, prompt: String, items: Vec<T>) -> Self {
         Self {
             title,
+            prompt,
             items,
             list_state: ListState::default().with_selected(Some(0)),
             search_input: Input::default(),
@@ -222,7 +224,7 @@ where
 
         frame.render_stateful_widget(list, layout[0], &mut self.list_state);
 
-        let label = Span::from("  Search: ");
+        let label = Span::from(format!(" {}: ", self.prompt));
         let cur = self.search_input.visual_cursor() + label.width();
         let text = Line::from(vec![
             label,
@@ -240,28 +242,30 @@ where
     }
 
     fn handle_event(&mut self, event: &Event) -> Option<Self::Command> {
-        if let Some(change) = self.search_input.handle_event(event) {
-            if change.value {
-                self.select_first();
-            }
-        }
-
         match mapkey(event) {
             KeyMapping::Up => {
                 self.select_prev();
+                return None;
             }
             KeyMapping::Down => {
                 self.select_next();
-            }
-            KeyMapping::Abort => {
-                return Some(SelectCommand::Abort);
+                return None;
             }
             KeyMapping::Accept => {
                 if let Some(item) = self.selected_item() {
                     return Some(SelectCommand::Accept(item.clone()));
                 }
             }
+            KeyMapping::Abort => {
+                return Some(SelectCommand::Abort);
+            }
             _ => (),
+        }
+
+        if let Some(change) = self.search_input.handle_event(event) {
+            if change.value {
+                self.select_first();
+            }
         }
 
         None
