@@ -59,16 +59,21 @@ impl CookieStore for HitmanCookieJar {
 }
 
 pub fn select_env(root_dir: &Path) -> Result<()> {
-    let config = read_and_merge_config(root_dir)?;
-    let items = find_environments(&config)?;
+    let items = find_environments(root_dir)?;
 
     let selected = Select::new("Select target", items.clone())
         .with_page_size(15)
         .with_filter(&|filter, _, value, _| fuzzy_match(filter, value))
         .prompt()?;
 
-    fs::write(root_dir.join(TARGET_FILE), &selected)?;
-    warn!("Target set to {}", &selected);
+    set_target(root_dir, &selected)?;
+
+    Ok(())
+}
+
+pub fn set_target(root_dir: &Path, selected: &str) -> Result<()> {
+    fs::write(root_dir.join(TARGET_FILE), selected)?;
+    warn!("Target set to {}", selected);
 
     Ok(())
 }
@@ -91,7 +96,8 @@ pub fn find_root_dir() -> Result<Option<PathBuf>> {
     Ok(res)
 }
 
-fn find_environments(config: &TomlTable) -> Result<Vec<String>> {
+pub fn find_environments(root_dir: &Path) -> Result<Vec<String>> {
+    let config = read_and_merge_config(root_dir)?;
     let keys: Vec<String> = config
         .keys()
         .filter(|k| !k.starts_with('_'))

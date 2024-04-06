@@ -11,8 +11,10 @@ pub mod prompt;
 pub mod select;
 
 pub trait Component {
+    type Command;
+
     fn render_ui(&mut self, frame: &mut Frame, area: Rect);
-    fn handle_event(&mut self, event: &Event) -> bool;
+    fn handle_event(&mut self, event: &Event) -> Option<Self::Command>;
 }
 
 pub(crate) fn centered(area: Rect, w: u16, h: u16) -> Rect {

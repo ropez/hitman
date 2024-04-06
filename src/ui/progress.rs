@@ -12,7 +12,11 @@ use super::{centered, Component};
 
 pub struct Progress;
 
+pub struct Abort;
+
 impl Component for Progress {
+    type Command = Abort;
+
     fn render_ui(&mut self, frame: &mut Frame, area: Rect) {
         let t = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -35,8 +39,8 @@ impl Component for Progress {
         frame.render_widget(loading, inner_area);
     }
 
-    fn handle_event(&mut self, _event: &Event) -> bool {
-        false
+    fn handle_event(&mut self, _event: &Event) -> Option<Abort> {
+        None
     }
 }
 

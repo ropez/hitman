@@ -11,7 +11,7 @@ use ratatui::{
     },
     Frame,
 };
-use tui_input::{Input, backend::crossterm::EventHandler};
+use tui_input::{backend::crossterm::EventHandler, Input};
 
 use super::Component;
 
@@ -35,11 +35,13 @@ impl RequestSelector {
 }
 
 impl Component for RequestSelector {
+    type Command = SelectCommand<String>;
+
     fn render_ui(&mut self, frame: &mut Frame, area: Rect) {
         self.selector.render_ui(frame, area);
     }
 
-    fn handle_event(&mut self, event: &Event) -> bool {
+    fn handle_event(&mut self, event: &Event) -> Option<Self::Command> {
         self.selector.handle_event(event)
     }
 }
@@ -59,7 +61,8 @@ fn format_item<'a>(text: String, indexes: &[usize]) -> ListItem<'a> {
                 })
             })
             .collect::<Vec<_>>(),
-    ).into()
+    )
+    .into()
 }
 
 pub trait SelectItem {
@@ -83,7 +86,7 @@ impl SelectItem for String {
 #[derive(Default)]
 pub struct Select<T>
 where
-    T: SelectItem,
+    T: SelectItem + Clone,
 {
     title: String,
     items: Vec<T>,
@@ -91,9 +94,18 @@ where
     search_input: Input,
 }
 
+#[derive(Debug, Clone)]
+pub enum SelectCommand<T>
+where
+    T: SelectItem + Clone,
+{
+    Abort,
+    Accept(T),
+}
+
 impl<T> Select<T>
 where
-    T: SelectItem
+    T: SelectItem + Clone,
 {
     pub fn new(title: String, items: Vec<T>) -> Self {
         Self {
@@ -107,7 +119,7 @@ where
 
 impl<T> Select<T>
 where
-    T: SelectItem
+    T: SelectItem + Clone,
 {
     pub fn selected_item(&self) -> Option<&T> {
         if let Some(i) = self.list_state.selected() {
@@ -157,25 +169,33 @@ where
 
             items.sort_by_key(|(_, score, _)| -score);
 
-            items.into_iter().map(|(i, _, indexes)| (i, Some(indexes))).collect()
+            items
+                .into_iter()
+                .map(|(i, _, indexes)| (i, Some(indexes)))
+                .collect()
         }
     }
 
     fn get_list_items<'a>(&self) -> Vec<ListItem<'a>> {
-        self.get_filtered_items().into_iter().map(|(i, highlight)| {
-            if let Some(hl) = highlight {
-                i.render_highlighted(&hl)
-            } else {
-                i.render()
-            }
-        }).collect()
+        self.get_filtered_items()
+            .into_iter()
+            .map(|(i, highlight)| {
+                if let Some(hl) = highlight {
+                    i.render_highlighted(&hl)
+                } else {
+                    i.render()
+                }
+            })
+            .collect()
     }
 }
 
 impl<T> Component for Select<T>
 where
-    T: SelectItem
+    T: SelectItem + Clone,
 {
+    type Command = SelectCommand<T>;
+
     fn render_ui(&mut self, frame: &mut Frame, area: Rect) {
         frame.render_widget(Clear, area);
 
@@ -199,31 +219,24 @@ where
 
         frame.render_stateful_widget(list, layout[0], &mut self.list_state);
 
-
-
         let label = Span::from("  Search: ");
         let cur = self.search_input.visual_cursor() + label.width();
         let text = Line::from(vec![
             label,
             Span::from(self.search_input.value()).yellow(),
         ]);
-        let block = Block::bordered().border_set(
-                symbols::border::Set {
-                    top_left: symbols::border::PLAIN.vertical_right,
-                    top_right: symbols::border::PLAIN.vertical_left,
-                    ..symbols::border::PLAIN
-                },
-            );
+        let block = Block::bordered().border_set(symbols::border::Set {
+            top_left: symbols::border::PLAIN.vertical_right,
+            top_right: symbols::border::PLAIN.vertical_left,
+            ..symbols::border::PLAIN
+        });
         let inner = block.inner(layout[1]);
-        frame.render_widget(
-            Paragraph::new(text).block(block),
-            layout[1],
-        );
+        frame.render_widget(Paragraph::new(text).block(block), layout[1]);
 
         frame.set_cursor(inner.x + cur as u16, inner.y);
     }
 
-    fn handle_event(&mut self, event: &Event) -> bool {
+    fn handle_event(&mut self, event: &Event) -> Option<Self::Command> {
         if let Some(change) = self.search_input.handle_event(event) {
             if change.value {
                 self.select_first();
@@ -235,29 +248,37 @@ where
                 match key.code {
                     KeyCode::Char('j') => {
                         self.select_next();
-                        true
+                        return None;
                     }
                     KeyCode::Char('k') => {
                         self.select_prev();
-                        true
+                        return None;
                     }
-                    _ => false,
-                }
-            } else {
-                match key.code {
-                    KeyCode::Down => {
-                        self.select_next();
-                        true
-                    }
-                    KeyCode::Up => {
-                        self.select_prev();
-                        true
-                    }
-                    _ => false,
+                    _ => (),
                 }
             }
-        } else {
-            false
+
+            match key.code {
+                KeyCode::Esc => {
+                    return Some(SelectCommand::Abort);
+                }
+                KeyCode::Enter => {
+                    if let Some(item) = self.selected_item() {
+                        return Some(SelectCommand::Accept(item.clone()));
+                    }
+                }
+                KeyCode::Down => {
+                    self.select_next();
+                    return None;
+                }
+                KeyCode::Up => {
+                    self.select_prev();
+                    return None;
+                }
+                _ => (),
+            }
         }
+
+        None
     }
 }
