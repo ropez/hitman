@@ -32,8 +32,8 @@ use super::{
     keymap::{mapkey, KeyMapping},
     output::OutputView,
     progress::Progress,
-    prompt::{Prompt, PromptCommand},
-    select::{RequestSelector, Select, SelectCommand, SelectItem},
+    prompt::{Prompt, PromptIntent},
+    select::{RequestSelector, Select, SelectIntent, SelectItem},
     Component,
 };
 
@@ -73,7 +73,7 @@ pub enum PendingState {
     Select { component: Select<Value> },
 }
 
-pub enum AppAction {
+pub enum Intent {
     Quit,
     TryRequest(String, Vec<(String, String)>),
     ChangeState(AppState),
@@ -112,8 +112,6 @@ impl App {
         B: Backend,
     {
         while !self.should_quit {
-            terminal.draw(|frame| self.render_ui(frame, frame.size()))?;
-
             if let AppState::RunningRequest { handle, .. } = &mut self.state {
                 if handle.is_finished() {
                     let (request, response) = handle.await??;
@@ -122,11 +120,13 @@ impl App {
                 }
             }
 
-            let mut pending_action = self.handle_events()?;
-            while let Some(action) = pending_action {
-                pending_action = match self.dispatch(action) {
+            terminal.draw(|frame| self.render_ui(frame, frame.size()))?;
+
+            let mut pending_intent = self.process_events()?;
+            while let Some(intent) = pending_intent {
+                pending_intent = match self.dispatch(intent) {
                     Ok(it) => it,
-                    Err(err) => Some(AppAction::ShowError(err.to_string())),
+                    Err(err) => Some(Intent::ShowError(err.to_string())),
                 };
             }
         }
@@ -134,46 +134,48 @@ impl App {
         Ok(())
     }
 
-    fn dispatch(&mut self, action: AppAction) -> Result<Option<AppAction>> {
-        use AppAction::*;
+    fn dispatch(&mut self, intent: Intent) -> Result<Option<Intent>> {
+        use Intent::*;
 
-        match action {
+        Ok(match intent {
             Quit => {
                 self.should_quit = true;
+                None
             }
             ChangeState(state) => {
                 self.error = None;
                 self.state = state;
+                None
             }
             TryRequest(file_path, options) => {
-                let res = self.try_request(file_path, options)?;
-                return Ok(res);
+                self.try_request(file_path, options)?
             }
             SelectTarget => {
                 let envs = find_environments(&self.root_dir)?;
                 let component =
                     Select::new("Select target".into(), "target".into(), envs);
 
-                return Ok(Some(ChangeState(AppState::SelectTarget {
-                    component,
-                })));
+                Some(ChangeState(AppState::SelectTarget { component }))
             }
             AcceptSelectTarget(s) => {
                 set_target(&self.root_dir, &s)?;
-                return Ok(Some(ChangeState(AppState::Idle)));
+                Some(ChangeState(AppState::Idle))
             }
             ShowError(err) => {
                 self.error = Some(err);
+                None
             }
-        }
-
-        Ok(None)
+        })
     }
 
-    fn handle_events(&mut self) -> Result<Option<AppAction>> {
-        // FIXME: Detect state changes, and avoid rerender
+    fn process_events(&mut self) -> Result<Option<Intent>> {
+        // Don't waste so much CPU when idle
+        let poll_timeout = match self.state {
+            AppState::RunningRequest { .. } => Duration::from_millis(50),
+            _ => Duration::from_secs(1),
+        };
 
-        if event::poll(Duration::from_millis(50))? {
+        if event::poll(poll_timeout)? {
             let event = event::read()?;
 
             return Ok(self.handle_event(&event));
@@ -186,7 +188,7 @@ impl App {
         &mut self,
         file_path: String,
         options: Vec<(String, String)>,
-    ) -> Result<Option<AppAction>> {
+    ) -> Result<Option<Intent>> {
         let root_dir = self.root_dir.clone();
 
         let path = PathBuf::from(file_path.clone());
@@ -204,10 +206,10 @@ impl App {
                     handle,
                     progress: Progress,
                 };
-                return Ok(Some(AppAction::ChangeState(state)));
+                return Ok(Some(Intent::ChangeState(state)));
             }
             Err(err) => match err {
-                // FIXME: Return Actions here too ("Prompt", "Select")
+                // FIXME: Return Intent here too ("Prompt", "Select")
                 SubstituteError::MultipleValuesFound { key, values } => {
                     let component = Select::new(
                         format!("Select substitution value for {{{{{key}}}}}",),
@@ -221,7 +223,7 @@ impl App {
                         pending_options: options,
                         pending_state: PendingState::Select { component },
                     };
-                    return Ok(Some(AppAction::ChangeState(state)));
+                    return Ok(Some(Intent::ChangeState(state)));
                 }
                 SubstituteError::ValueNotFound { key, fallback } => {
                     let component =
@@ -234,7 +236,7 @@ impl App {
                         pending_options: options,
                         pending_state: PendingState::Prompt { component },
                     };
-                    return Ok(Some(AppAction::ChangeState(state)));
+                    return Ok(Some(Intent::ChangeState(state)));
                 }
                 e => bail!(e),
             },
@@ -243,7 +245,7 @@ impl App {
 }
 
 impl Component for App {
-    type Command = AppAction;
+    type Intent = Intent;
 
     fn render_ui(&mut self, frame: &mut Frame, area: Rect) {
         let layout = Layout::new(
@@ -257,8 +259,8 @@ impl Component for App {
         self.render_popup(frame);
     }
 
-    fn handle_event(&mut self, event: &Event) -> Option<Self::Command> {
-        use AppAction::*;
+    fn handle_event(&mut self, event: &Event) -> Option<Self::Intent> {
+        use Intent::*;
 
         if let Event::Key(key) = event {
             if key.kind == KeyEventKind::Press {
@@ -272,16 +274,16 @@ impl Component for App {
                     } => {
                         match pending_state {
                             PendingState::Select { component } => {
-                                if let Some(command) =
+                                if let Some(intent) =
                                     component.handle_event(&event)
                                 {
-                                    match command {
-                                        SelectCommand::Abort => {
+                                    match intent {
+                                        SelectIntent::Abort => {
                                             return Some(ChangeState(
                                                 AppState::Idle,
                                             ));
                                         }
-                                        SelectCommand::Accept(selected) => {
+                                        SelectIntent::Accept(selected) => {
                                             let value = match selected {
                                                 Value::Table(t) => match t.get("value") {
                                                     Some(Value::String(value)) => value.clone(),
@@ -307,16 +309,16 @@ impl Component for App {
                                 return None;
                             }
                             PendingState::Prompt { component } => {
-                                if let Some(command) =
+                                if let Some(intent) =
                                     component.handle_event(&event)
                                 {
-                                    match command {
-                                        PromptCommand::Abort => {
+                                    match intent {
+                                        PromptIntent::Abort => {
                                             return Some(ChangeState(
                                                 AppState::Idle,
                                             ));
                                         }
-                                        PromptCommand::Accept(value) => {
+                                        PromptIntent::Accept(value) => {
                                             pending_options
                                                 .push((key.clone(), value));
                                             return Some(TryRequest(
@@ -332,12 +334,12 @@ impl Component for App {
                     }
 
                     AppState::Idle => {
-                        if let Some(command) =
+                        if let Some(intent) =
                             self.request_selector.handle_event(&event)
                         {
-                            match command {
-                                SelectCommand::Abort => (),
-                                SelectCommand::Accept(file_path) => {
+                            match intent {
+                                SelectIntent::Abort => (),
+                                SelectIntent::Accept(file_path) => {
                                     // FIXME: Get selection here
                                     return Some(TryRequest(
                                         file_path,
@@ -350,9 +352,9 @@ impl Component for App {
                         self.output_view.handle_event(&event);
 
                         match mapkey(&event) {
-                            KeyMapping::Abort => return Some(AppAction::Quit),
+                            KeyMapping::Abort => return Some(Intent::Quit),
                             KeyMapping::SelectTarget => {
-                                return Some(AppAction::SelectTarget);
+                                return Some(Intent::SelectTarget);
                             }
                             _ => (),
                         }
@@ -366,12 +368,12 @@ impl Component for App {
                     }
 
                     AppState::SelectTarget { component } => {
-                        if let Some(command) = component.handle_event(&event) {
-                            match command {
-                                SelectCommand::Abort => {
+                        if let Some(intent) = component.handle_event(&event) {
+                            match intent {
+                                SelectIntent::Abort => {
                                     return Some(ChangeState(AppState::Idle));
                                 }
-                                SelectCommand::Accept(s) => {
+                                SelectIntent::Accept(s) => {
                                     return Some(AcceptSelectTarget(s));
                                 }
                             }

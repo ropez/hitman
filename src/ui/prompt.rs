@@ -17,7 +17,7 @@ pub struct Prompt {
     input: Input,
 }
 
-pub enum PromptCommand {
+pub enum PromptIntent {
     Abort,
     Accept(String),
 }
@@ -49,7 +49,7 @@ impl Prompt {
 }
 
 impl Component for Prompt {
-    type Command = PromptCommand;
+    type Intent = PromptIntent;
 
     fn render_ui(&mut self, frame: &mut Frame, area: Rect) {
         let chunks = Layout::new(
@@ -88,13 +88,13 @@ impl Component for Prompt {
         frame.set_cursor(inner.x + cur + self.input.visual_cursor() as u16, inner.y);
     }
 
-    fn handle_event(&mut self, event: &Event) -> Option<PromptCommand> {
+    fn handle_event(&mut self, event: &Event) -> Option<PromptIntent> {
         match mapkey(event) {
             KeyMapping::Accept => {
-                return Some(PromptCommand::Accept(self.value()));
+                return Some(PromptIntent::Accept(self.value()));
             }
             KeyMapping::Abort => {
-                return Some(PromptCommand::Abort);
+                return Some(PromptIntent::Abort);
             }
             _ => (),
         }

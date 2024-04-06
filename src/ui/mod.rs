@@ -12,10 +12,13 @@ pub mod select;
 pub mod keymap;
 
 pub trait Component {
-    type Command;
+    type Intent;
 
     fn render_ui(&mut self, frame: &mut Frame, area: Rect);
-    fn handle_event(&mut self, event: &Event) -> Option<Self::Command>;
+
+    fn handle_event(&mut self, _event: &Event) -> Option<Self::Intent> {
+        None
+    }
 }
 
 pub(crate) fn centered(area: Rect, w: u16, h: u16) -> Rect {

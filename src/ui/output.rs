@@ -40,7 +40,7 @@ impl OutputView {
 }
 
 impl Component for OutputView {
-    type Command = ();
+    type Intent = ();
 
     fn render_ui(&mut self, frame: &mut Frame, area: Rect) {
         let blue = Style::new().blue();

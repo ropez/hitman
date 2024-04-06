@@ -34,13 +34,13 @@ impl RequestSelector {
 }
 
 impl Component for RequestSelector {
-    type Command = SelectCommand<String>;
+    type Intent = SelectIntent<String>;
 
     fn render_ui(&mut self, frame: &mut Frame, area: Rect) {
         self.selector.render_ui(frame, area);
     }
 
-    fn handle_event(&mut self, event: &Event) -> Option<Self::Command> {
+    fn handle_event(&mut self, event: &Event) -> Option<Self::Intent> {
         self.selector.handle_event(event)
     }
 }
@@ -95,7 +95,7 @@ where
 }
 
 #[derive(Debug, Clone)]
-pub enum SelectCommand<T>
+pub enum SelectIntent<T>
 where
     T: SelectItem + Clone,
 {
@@ -195,7 +195,7 @@ impl<T> Component for Select<T>
 where
     T: SelectItem + Clone,
 {
-    type Command = SelectCommand<T>;
+    type Intent = SelectIntent<T>;
 
     fn render_ui(&mut self, frame: &mut Frame, area: Rect) {
         frame.render_widget(Clear, area);
@@ -237,7 +237,7 @@ where
         frame.set_cursor(inner.x + cur as u16, inner.y);
     }
 
-    fn handle_event(&mut self, event: &Event) -> Option<Self::Command> {
+    fn handle_event(&mut self, event: &Event) -> Option<Self::Intent> {
         match mapkey(event) {
             KeyMapping::Up => {
                 self.select_prev();
@@ -249,11 +249,11 @@ where
             }
             KeyMapping::Accept => {
                 if let Some(item) = self.selected_item() {
-                    return Some(SelectCommand::Accept(item.clone()));
+                    return Some(SelectIntent::Accept(item.clone()));
                 }
             }
             KeyMapping::Abort => {
-                return Some(SelectCommand::Abort);
+                return Some(SelectIntent::Abort);
             }
             _ => (),
         }
