@@ -31,10 +31,6 @@ impl RequestSelector {
             selector: Select::new("Requests".into(), "Search".into(), items),
         }
     }
-
-    pub fn selected_path(&self) -> Option<&String> {
-        self.selector.selected_item()
-    }
 }
 
 impl Component for RequestSelector {
