@@ -1,6 +1,5 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crossterm::event::Event;
 use ratatui::{
     layout::Alignment,
     prelude::{Frame, Rect},
@@ -15,7 +14,7 @@ pub struct Progress;
 pub struct Abort;
 
 impl Component for Progress {
-    type Command = Abort;
+    type Intent = Abort;
 
     fn render_ui(&mut self, frame: &mut Frame, area: Rect) {
         let t = SystemTime::now()
@@ -37,10 +36,6 @@ impl Component for Progress {
         let inner_area = centered(area, 18, 3);
         frame.render_widget(Clear, inner_area);
         frame.render_widget(loading, inner_area);
-    }
-
-    fn handle_event(&mut self, _event: &Event) -> Option<Abort> {
-        None
     }
 }
 
