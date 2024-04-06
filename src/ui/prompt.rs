@@ -2,7 +2,7 @@ use crossterm::event::Event;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     widgets::{Block, Clear, Paragraph},
-    Frame,
+    Frame, text::{Span, Line}, style::Stylize,
 };
 use tui_input::{backend::crossterm::EventHandler, Input};
 
@@ -13,8 +13,8 @@ use super::{
 
 pub struct Prompt {
     title: String,
+    fallback: Option<String>,
     input: Input,
-    has_value: bool,
 }
 
 pub enum PromptCommand {
@@ -26,20 +26,25 @@ impl Prompt {
     pub fn new(title: String) -> Self {
         Self {
             title,
+            fallback: None,
             input: Input::default(),
-            has_value: false,
         }
     }
 
-    pub fn with_value(self, value: String) -> Self {
+    pub fn with_fallback(self, value: Option<String>) -> Self {
         Self {
-            input: self.input.with_value(value),
+            fallback: value,
             ..self
         }
     }
 
     pub fn value(&self) -> String {
-        self.input.value().into()
+        let input_value = self.input.value().to_string();
+        if input_value.len() > 0 {
+            input_value
+        } else {
+            self.fallback.clone().unwrap_or(input_value)
+        }
     }
 }
 
@@ -62,13 +67,25 @@ impl Component for Prompt {
         let block = Block::bordered().title(self.title.clone());
         let inner = block.inner(area);
 
+        let input_value = self.input.value();
+        let mut spans = Vec::new();
+        spans.push(Span::from("> "));
+        spans.push(Span::from(input_value));
+        let cur = spans[0].width() as u16;
+
+        if input_value.len() == 0 {
+            if let Some(value) = &self.fallback {
+                spans.push(Span::from(value).dark_gray());
+            }
+        }
+
         frame.render_widget(Clear, area);
         frame.render_widget(
-            Paragraph::new(self.input.value()).block(block),
+            Paragraph::new(Line::from(spans)).block(block),
             area,
         );
 
-        frame.set_cursor(inner.x + self.input.visual_cursor() as u16, inner.y);
+        frame.set_cursor(inner.x + cur + self.input.visual_cursor() as u16, inner.y);
     }
 
     fn handle_event(&mut self, event: &Event) -> Option<PromptCommand> {
@@ -82,9 +99,7 @@ impl Component for Prompt {
             _ => (),
         }
 
-        if let Some(state_changed) = self.input.handle_event(event) {
-            self.has_value = state_changed.value;
-        }
+        self.input.handle_event(event);
 
         None
     }

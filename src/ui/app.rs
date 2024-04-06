@@ -9,7 +9,7 @@ use anyhow::{bail, Context, Result};
 use crossterm::event::{self, Event, KeyEventKind};
 use ratatui::{
     backend::Backend,
-    layout::{Constraint, Direction, Layout, Margin, Rect},
+    layout::{Constraint, Direction, Layout, Rect},
     style::{Style, Stylize},
     widgets::Paragraph,
     Frame, Terminal,
@@ -33,7 +33,7 @@ use super::{
     progress::Progress,
     prompt::{Prompt, PromptCommand},
     select::{RequestSelector, Select, SelectCommand, SelectItem},
-    Component,
+    Component, centered,
 };
 
 pub struct App {
@@ -42,6 +42,7 @@ pub struct App {
     output_view: OutputView,
 
     state: AppState,
+    should_quit: bool,
 }
 
 pub enum AppState {
@@ -69,6 +70,13 @@ pub enum PendingState {
     Select { component: Select<Value> },
 }
 
+pub enum AppCommand {
+    Quit,
+    TryRequest,
+    ChangeState(AppState),
+    SelectTarget,
+}
+
 impl App {
     pub fn new() -> Result<Self> {
         let root_dir = find_root_dir()?.context("No hitman.toml found")?;
@@ -89,6 +97,7 @@ impl App {
             request_selector,
             output_view: OutputView::default(),
             state: AppState::Idle,
+            should_quit: false,
         })
     }
 
@@ -96,8 +105,7 @@ impl App {
     where
         B: Backend,
     {
-        let mut should_quit = false;
-        while !should_quit {
+        while !self.should_quit {
             terminal.draw(|frame| self.render_ui(frame))?;
 
             if let AppState::RunningRequest { handle, .. } = &mut self.state {
@@ -108,10 +116,43 @@ impl App {
                 }
             }
 
-            should_quit = self.handle_events().await?;
+            let mut command_opt = self.handle_events()?;
+            while let Some(command) = command_opt {
+                command_opt = self.handle_command(command)?;
+            }
         }
 
         Ok(())
+    }
+
+    fn handle_command(
+        &mut self,
+        command: AppCommand,
+    ) -> Result<Option<AppCommand>> {
+        use AppCommand::*;
+
+        match command {
+            Quit => {
+                self.should_quit = true;
+            }
+            ChangeState(state) => {
+                self.state = state;
+            }
+            TryRequest => {
+                self.try_request()?;
+            }
+            SelectTarget => {
+                let envs = find_environments(&self.root_dir)?;
+
+                let component = Select::new("Select target".into(), "target".into(), envs);
+
+                return Ok(Some(ChangeState(AppState::SelectTarget {
+                    component,
+                })));
+            }
+        }
+
+        Ok(None)
     }
 
     fn render_ui(&mut self, frame: &mut Frame) {
@@ -154,17 +195,17 @@ impl App {
             AppState::PendingValue { pending_state, .. } => match pending_state
             {
                 PendingState::Prompt { component, .. } => {
-                    let inner_area = area.inner(&Margin::new(42, 10));
+                    let inner_area = centered(area, 30, 30);
                     component.render_ui(frame, inner_area);
                 }
                 PendingState::Select { component, .. } => {
-                    let inner_area = area.inner(&Margin::new(42, 10));
+                    let inner_area = centered(area, 60, 20);
                     component.render_ui(frame, inner_area);
                 }
             },
 
             AppState::SelectTarget { component } => {
-                let inner_area = area.inner(&Margin::new(42, 10));
+                let inner_area = centered(area, 30, 20);
                 component.render_ui(frame, inner_area);
             }
 
@@ -176,9 +217,10 @@ impl App {
         }
     }
 
-    async fn handle_events(&mut self) -> Result<bool> {
+    fn handle_events(&mut self) -> Result<Option<AppCommand>> {
         // FIXME: Detect state changes, and avoid rerender
-        // FIXME: No async (return "commands" instead)
+
+        use AppCommand::*;
 
         if event::poll(Duration::from_millis(50))? {
             let event = event::read()?;
@@ -193,15 +235,17 @@ impl App {
                                     {
                                         match command {
                                             SelectCommand::Abort => {
-                                                self.state = AppState::Idle;
+                                                return Ok(Some(ChangeState(
+                                                    AppState::Idle,
+                                                )));
                                             }
                                             SelectCommand::Accept(_) => {
                                                 // FIXME: Get result here
-                                                self.try_request()?;
+                                                return Ok(Some(TryRequest));
                                             }
                                         }
                                     }
-                                    return Ok(false);
+                                    return Ok(None);
                                 }
                                 PendingState::Prompt { component } => {
                                     if let Some(command) =
@@ -209,15 +253,17 @@ impl App {
                                     {
                                         match command {
                                             PromptCommand::Abort => {
-                                                self.state = AppState::Idle;
+                                                return Ok(Some(ChangeState(
+                                                    AppState::Idle,
+                                                )));
                                             }
                                             PromptCommand::Accept(_) => {
                                                 // FIXME: Get result here
-                                                self.try_request()?;
+                                                return Ok(Some(TryRequest));
                                             }
                                         }
                                     }
-                                    return Ok(false);
+                                    return Ok(None);
                                 }
                             }
                         }
@@ -230,7 +276,7 @@ impl App {
                                     SelectCommand::Abort => (),
                                     SelectCommand::Accept(_) => {
                                         // FIXME: Get selection here
-                                        self.try_request()?;
+                                        return Ok(Some(TryRequest));
                                     }
                                 }
                             }
@@ -238,18 +284,11 @@ impl App {
                             self.output_view.handle_event(&event);
 
                             match mapkey(&event) {
-                                KeyMapping::Abort => return Ok(true),
+                                KeyMapping::Abort => {
+                                    return Ok(Some(AppCommand::Quit))
+                                }
                                 KeyMapping::SelectTarget => {
-                                    let envs =
-                                        find_environments(&self.root_dir)?;
-
-                                    let component = Select::new(
-                                        "Select environment".into(),
-                                        envs,
-                                    );
-
-                                    self.state =
-                                        AppState::SelectTarget { component };
+                                    return Ok(Some(AppCommand::SelectTarget));
                                 }
                                 _ => (),
                             }
@@ -258,7 +297,7 @@ impl App {
                         AppState::RunningRequest { handle, .. } => {
                             if let KeyMapping::Abort = mapkey(&event) {
                                 handle.abort();
-                                self.state = AppState::Idle;
+                                return Ok(Some(ChangeState(AppState::Idle)));
                             }
                         }
 
@@ -268,11 +307,15 @@ impl App {
                             {
                                 match command {
                                     SelectCommand::Abort => {
-                                        self.state = AppState::Idle;
+                                        return Ok(Some(ChangeState(
+                                            AppState::Idle,
+                                        )));
                                     }
                                     SelectCommand::Accept(s) => {
                                         set_target(&self.root_dir, &s)?;
-                                        self.state = AppState::Idle;
+                                        return Ok(Some(ChangeState(
+                                            AppState::Idle,
+                                        )));
                                     }
                                 }
                             }
@@ -281,7 +324,8 @@ impl App {
                 }
             }
         }
-        Ok(false)
+
+        Ok(None)
     }
 
     fn try_request(&mut self) -> Result<(), anyhow::Error> {
@@ -341,9 +385,9 @@ impl App {
                     SubstituteError::MultipleValuesFound { key, values } => {
                         let component = Select::new(
                             format!(
-                                "Select substitution value for {{{{{}}}}}",
-                                &key
+                                "Select substitution value for {{{{{key}}}}}",
                             ),
+                            key.clone(),
                             values.clone(),
                         );
 
@@ -355,12 +399,7 @@ impl App {
                     }
                     SubstituteError::ValueNotFound { key, fallback } => {
                         let component =
-                            Prompt::new(format!("Enter value for {key}"));
-                        let component = if let Some(value) = fallback.clone() {
-                            component.with_value(value)
-                        } else {
-                            component
-                        };
+                            Prompt::new(format!("Enter value for {key}")).with_fallback(fallback);
                         self.state = AppState::PendingValue {
                             key,
                             pending_options,
