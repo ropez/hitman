@@ -18,7 +18,10 @@ use tokio::task::JoinHandle;
 use toml::Value;
 
 use hitman::{
-    env::{find_available_requests, find_root_dir, load_env, update_data},
+    env::{
+        find_available_requests, find_environments, find_root_dir, load_env,
+        set_target, update_data,
+    },
     extract::extract_variables,
     request::{build_client, do_request},
     substitute::{substitute, SubstituteError},
@@ -27,8 +30,8 @@ use hitman::{
 use super::{
     output::OutputView,
     progress::Progress,
-    prompt::Prompt,
-    select::{RequestSelector, Select, SelectItem},
+    prompt::{Prompt, PromptCommand},
+    select::{RequestSelector, Select, SelectCommand, SelectItem},
     Component,
 };
 
@@ -55,7 +58,7 @@ pub enum AppState {
         progress: Progress,
     },
 
-    SelectEnvironment {
+    SelectTarget {
         component: Select<String>,
     },
 }
@@ -139,7 +142,7 @@ impl App {
     }
 
     fn render_status(&mut self, frame: &mut Frame, area: Rect) {
-        let status_line = Paragraph::new("S: Select environment")
+        let status_line = Paragraph::new("Ctrl+S: Select target")
             .style(Style::new().dark_gray());
         frame.render_widget(status_line, area);
     }
@@ -159,7 +162,7 @@ impl App {
                 }
             },
 
-            AppState::SelectEnvironment { component } => {
+            AppState::SelectTarget { component } => {
                 let inner_area = area.inner(&Margin::new(42, 10));
                 component.render_ui(frame, inner_area);
             }
@@ -184,42 +187,54 @@ impl App {
                         AppState::PendingValue { pending_state, .. } => {
                             match pending_state {
                                 PendingState::Select { component } => {
-                                    if component.handle_event(&event) {
-                                        return Ok(false);
+                                    if let Some(command) =
+                                        component.handle_event(&event)
+                                    {
+                                        match command {
+                                            SelectCommand::Abort => {
+                                                self.state = AppState::Idle;
+                                            }
+                                            SelectCommand::Accept(_) => {
+                                                // FIXME: Get result here
+                                                self.try_request()?;
+                                            }
+                                        }
                                     }
+                                    return Ok(false);
                                 }
                                 PendingState::Prompt { component } => {
-                                    if component.handle_event(&event) {
-                                        return Ok(false);
+                                    if let Some(command) =
+                                        component.handle_event(&event)
+                                    {
+                                        match command {
+                                            PromptCommand::Abort => {
+                                                self.state = AppState::Idle;
+                                            }
+                                            PromptCommand::Accept(_) => {
+                                                // FIXME: Get result here
+                                                self.try_request()?;
+                                            }
+                                        }
                                     }
-                                }
-                            }
-
-                            if key.modifiers.contains(KeyModifiers::CONTROL) {
-                                match key.code {
-                                    KeyCode::Char('c') | KeyCode::Char('q') => {
-                                        self.state = AppState::Idle;
-                                    }
-                                    _ => (),
-                                }
-                            } else {
-                                match key.code {
-                                    KeyCode::Enter => {
-                                        self.try_request()?;
-                                    }
-                                    _ => (),
+                                    return Ok(false);
                                 }
                             }
                         }
 
                         AppState::Idle => {
-                            if self.request_selector.handle_event(&event) {
-                                return Ok(false);
+                            if let Some(command) =
+                                self.request_selector.handle_event(&event)
+                            {
+                                match command {
+                                    SelectCommand::Abort => (),
+                                    SelectCommand::Accept(_) => {
+                                        // FIXME: Get selection here
+                                        self.try_request()?;
+                                    }
+                                }
                             }
 
-                            if self.output_view.handle_event(&event) {
-                                return Ok(false);
-                            }
+                            self.output_view.handle_event(&event);
 
                             if key.modifiers.contains(KeyModifiers::CONTROL) {
                                 match key.code {
@@ -227,28 +242,17 @@ impl App {
                                         return Ok(true);
                                     }
                                     KeyCode::Char('s') => {
-                                        let envs: Vec<String> = vec![
-                                            "Local".into(),
-                                            "Remote".into(),
-                                            "Production".into(),
-                                        ];
+                                        let envs =
+                                            find_environments(&self.root_dir)?;
 
                                         let component = Select::new(
                                             "Select environment".into(),
                                             envs,
                                         );
 
-                                        self.state =
-                                            AppState::SelectEnvironment {
-                                                component,
-                                            };
-                                    }
-                                    _ => (),
-                                }
-                            } else {
-                                match key.code {
-                                    KeyCode::Enter => {
-                                        self.try_request()?;
+                                        self.state = AppState::SelectTarget {
+                                            component,
+                                        };
                                     }
                                     _ => (),
                                 }
@@ -267,17 +271,18 @@ impl App {
                             }
                         }
 
-                        AppState::SelectEnvironment { component } => {
-                            if component.handle_event(&event) {
-                                return Ok(false);
-                            }
-
-                            if key.modifiers.contains(KeyModifiers::CONTROL) {
-                                match key.code {
-                                    KeyCode::Char('c') | KeyCode::Char('q') => {
+                        AppState::SelectTarget { component } => {
+                            if let Some(command) =
+                                component.handle_event(&event)
+                            {
+                                match command {
+                                    SelectCommand::Abort => {
                                         self.state = AppState::Idle;
                                     }
-                                    _ => (),
+                                    SelectCommand::Accept(s) => {
+                                        set_target(&self.root_dir, &s)?;
+                                        self.state = AppState::Idle;
+                                    }
                                 }
                             }
                         }

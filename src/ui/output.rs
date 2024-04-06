@@ -37,6 +37,8 @@ impl OutputView {
 }
 
 impl Component for OutputView {
+    type Command = ();
+
     fn render_ui(&mut self, frame: &mut Frame, area: Rect) {
         let blue = Style::new().blue();
         let req_lines =
@@ -55,25 +57,21 @@ impl Component for OutputView {
         frame.render_widget(para, area);
     }
 
-    fn handle_event(&mut self, event: &Event) -> bool {
+    fn handle_event(&mut self, event: &Event) -> Option<()> {
         if let Event::Key(key) = event {
             if key.modifiers.contains(KeyModifiers::CONTROL) {
                 match key.code {
                     KeyCode::Char('p') => {
                         self.scroll_up();
-                        true
                     }
                     KeyCode::Char('n') => {
                         self.scroll_down();
-                        true
                     }
-                    _ => false,
+                    _ => ()
                 }
-            } else {
-                false
             }
-        } else {
-            false
         }
+
+        None
     }
 }

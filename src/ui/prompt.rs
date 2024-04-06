@@ -14,6 +14,11 @@ pub struct Prompt {
     has_value: bool,
 }
 
+pub enum PromptCommand {
+    Abort,
+    Accept(String),
+}
+
 impl Prompt {
     pub fn new(title: String) -> Self {
         Self {
@@ -36,6 +41,8 @@ impl Prompt {
 }
 
 impl Component for Prompt {
+    type Command = PromptCommand;
+
     fn render_ui(&mut self, frame: &mut Frame, area: Rect) {
         let chunks = Layout::new(
             Direction::Vertical,
@@ -61,19 +68,20 @@ impl Component for Prompt {
         frame.set_cursor(inner.x + self.input.visual_cursor() as u16, inner.y);
     }
 
-    fn handle_event(&mut self, event: &Event) -> bool {
-        // TODO: Follow this pattern in our components:
-        // Return a "StateChanged" option form event handlers.
-
+    fn handle_event(&mut self, event: &Event) -> Option<PromptCommand> {
         if let Event::Key(key) = event {
             if let KeyCode::Enter = key.code {
-                return false;
+                return Some(PromptCommand::Accept(self.value()));
+            }
+            if let KeyCode::Esc = key.code {
+                return Some(PromptCommand::Abort);
             }
         }
 
         if let Some(state_changed) = self.input.handle_event(event) {
             self.has_value = state_changed.value;
         }
-        true
+
+        None
     }
 }
