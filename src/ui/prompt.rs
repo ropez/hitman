@@ -1,4 +1,4 @@
-use crossterm::event::{Event, KeyCode};
+use crossterm::event::Event;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     widgets::{Block, Clear, Paragraph},
@@ -6,7 +6,10 @@ use ratatui::{
 };
 use tui_input::{backend::crossterm::EventHandler, Input};
 
-use super::Component;
+use super::{
+    keymap::{mapkey, KeyMapping},
+    Component,
+};
 
 pub struct Prompt {
     title: String,
@@ -69,13 +72,14 @@ impl Component for Prompt {
     }
 
     fn handle_event(&mut self, event: &Event) -> Option<PromptCommand> {
-        if let Event::Key(key) = event {
-            if let KeyCode::Enter = key.code {
+        match mapkey(event) {
+            KeyMapping::Accept => {
                 return Some(PromptCommand::Accept(self.value()));
             }
-            if let KeyCode::Esc = key.code {
+            KeyMapping::Abort => {
                 return Some(PromptCommand::Abort);
             }
+            _ => (),
         }
 
         if let Some(state_changed) = self.input.handle_event(event) {

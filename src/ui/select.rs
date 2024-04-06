@@ -1,4 +1,4 @@
-use crossterm::event::{Event, KeyCode, KeyModifiers};
+use crossterm::event::Event;
 use fuzzy_matcher::skim::SkimMatcherV2;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
@@ -13,7 +13,10 @@ use ratatui::{
 };
 use tui_input::{backend::crossterm::EventHandler, Input};
 
-use super::Component;
+use super::{
+    keymap::{mapkey, KeyMapping},
+    Component,
+};
 
 #[derive(Default)]
 pub struct RequestSelector {
@@ -243,40 +246,22 @@ where
             }
         }
 
-        if let Event::Key(key) = event {
-            if key.modifiers.contains(KeyModifiers::CONTROL) {
-                match key.code {
-                    KeyCode::Char('j') => {
-                        self.select_next();
-                        return None;
-                    }
-                    KeyCode::Char('k') => {
-                        self.select_prev();
-                        return None;
-                    }
-                    _ => (),
+        match mapkey(event) {
+            KeyMapping::Up => {
+                self.select_prev();
+            }
+            KeyMapping::Down => {
+                self.select_next();
+            }
+            KeyMapping::Abort => {
+                return Some(SelectCommand::Abort);
+            }
+            KeyMapping::Accept => {
+                if let Some(item) = self.selected_item() {
+                    return Some(SelectCommand::Accept(item.clone()));
                 }
             }
-
-            match key.code {
-                KeyCode::Esc => {
-                    return Some(SelectCommand::Abort);
-                }
-                KeyCode::Enter => {
-                    if let Some(item) = self.selected_item() {
-                        return Some(SelectCommand::Accept(item.clone()));
-                    }
-                }
-                KeyCode::Down => {
-                    self.select_next();
-                    return None;
-                }
-                KeyCode::Up => {
-                    self.select_prev();
-                    return None;
-                }
-                _ => (),
-            }
+            _ => (),
         }
 
         None
