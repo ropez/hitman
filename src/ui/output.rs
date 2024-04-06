@@ -1,4 +1,4 @@
-use crossterm::event::{Event, KeyCode, KeyModifiers};
+use crossterm::event::Event;
 use ratatui::{
     layout::Rect,
     style::{Style, Stylize},
@@ -7,7 +7,10 @@ use ratatui::{
     Frame,
 };
 
-use super::Component;
+use super::{
+    keymap::{mapkey, KeyMapping},
+    Component,
+};
 
 #[derive(Default)]
 pub struct OutputView {
@@ -58,18 +61,14 @@ impl Component for OutputView {
     }
 
     fn handle_event(&mut self, event: &Event) -> Option<()> {
-        if let Event::Key(key) = event {
-            if key.modifiers.contains(KeyModifiers::CONTROL) {
-                match key.code {
-                    KeyCode::Char('p') => {
-                        self.scroll_up();
-                    }
-                    KeyCode::Char('n') => {
-                        self.scroll_down();
-                    }
-                    _ => ()
-                }
+        match mapkey(event) {
+            KeyMapping::ScrollUp => {
+                self.scroll_up();
             }
+            KeyMapping::ScrollDown => {
+                self.scroll_down();
+            }
+            _ => (),
         }
 
         None

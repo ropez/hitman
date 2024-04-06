@@ -6,7 +6,7 @@ use std::{
 };
 
 use anyhow::{bail, Context, Result};
-use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
+use crossterm::event::{self, Event, KeyEventKind};
 use ratatui::{
     backend::Backend,
     layout::{Constraint, Direction, Layout, Margin, Rect},
@@ -28,6 +28,7 @@ use hitman::{
 };
 
 use super::{
+    keymap::{mapkey, KeyMapping},
     output::OutputView,
     progress::Progress,
     prompt::{Prompt, PromptCommand},
@@ -236,38 +237,28 @@ impl App {
 
                             self.output_view.handle_event(&event);
 
-                            if key.modifiers.contains(KeyModifiers::CONTROL) {
-                                match key.code {
-                                    KeyCode::Char('c') | KeyCode::Char('q') => {
-                                        return Ok(true);
-                                    }
-                                    KeyCode::Char('s') => {
-                                        let envs =
-                                            find_environments(&self.root_dir)?;
+                            match mapkey(&event) {
+                                KeyMapping::Abort => return Ok(true),
+                                KeyMapping::SelectTarget => {
+                                    let envs =
+                                        find_environments(&self.root_dir)?;
 
-                                        let component = Select::new(
-                                            "Select environment".into(),
-                                            envs,
-                                        );
+                                    let component = Select::new(
+                                        "Select environment".into(),
+                                        envs,
+                                    );
 
-                                        self.state = AppState::SelectTarget {
-                                            component,
-                                        };
-                                    }
-                                    _ => (),
+                                    self.state =
+                                        AppState::SelectTarget { component };
                                 }
+                                _ => (),
                             }
                         }
 
                         AppState::RunningRequest { handle, .. } => {
-                            if key.modifiers.contains(KeyModifiers::CONTROL) {
-                                match key.code {
-                                    KeyCode::Char('c') | KeyCode::Char('q') => {
-                                        handle.abort();
-                                        self.state = AppState::Idle;
-                                    }
-                                    _ => (),
-                                }
+                            if let KeyMapping::Abort = mapkey(&event) {
+                                handle.abort();
+                                self.state = AppState::Idle;
                             }
                         }
 

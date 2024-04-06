@@ -9,6 +9,7 @@ pub mod output;
 pub mod progress;
 pub mod prompt;
 pub mod select;
+pub mod keymap;
 
 pub trait Component {
     type Command;
