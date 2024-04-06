@@ -5,7 +5,7 @@ use std::{
     time::Duration,
 };
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use crossterm::event::{self, Event, KeyEventKind};
 use ratatui::{
     backend::Backend,
@@ -75,11 +75,26 @@ pub enum PendingState {
 
 pub enum Intent {
     Quit,
-    TryRequest(String, Vec<(String, String)>),
+    PrepareRequest(String, Vec<(String, String)>),
+    SendRequest {
+        file_path: String,
+        prepared_request: String,
+    },
+    AskForValue {
+        key: String,
+        file_path: String,
+        pending_options: Vec<(String, String)>,
+        params: AskForValueParams,
+    },
     ChangeState(AppState),
     SelectTarget,
     AcceptSelectTarget(String),
     ShowError(String),
+}
+
+pub enum AskForValueParams {
+    Prompt { fallback: Option<String> },
+    Select { values: Vec<Value> },
 }
 
 impl App {
@@ -147,9 +162,49 @@ impl App {
                 self.state = state;
                 None
             }
-            TryRequest(file_path, options) => {
+            PrepareRequest(file_path, options) => {
                 self.try_request(file_path, options)?
             }
+            SendRequest {
+                file_path,
+                prepared_request,
+            } => self.send_request(file_path, prepared_request)?,
+            AskForValue {
+                key,
+                file_path,
+                pending_options,
+                params,
+            } => match params {
+                AskForValueParams::Select { values } => {
+                    let component = Select::new(
+                        format!("Select substitution value for {{{{{key}}}}}",),
+                        key.clone(),
+                        values.clone(),
+                    );
+
+                    let state = AppState::PendingValue {
+                        key,
+                        file_path,
+                        pending_options,
+                        pending_state: PendingState::Select { component },
+                    };
+                    Some(Intent::ChangeState(state))
+                }
+
+                AskForValueParams::Prompt { fallback } => {
+                    let component =
+                        Prompt::new(format!("Enter value for {key}"))
+                            .with_fallback(fallback);
+
+                    let state = AppState::PendingValue {
+                        key,
+                        file_path,
+                        pending_options,
+                        pending_state: PendingState::Prompt { component },
+                    };
+                    Some(Intent::ChangeState(state))
+                }
+            },
             SelectTarget => {
                 let envs = find_environments(&self.root_dir)?;
                 let component =
@@ -194,53 +249,53 @@ impl App {
         let path = PathBuf::from(file_path.clone());
         let env = load_env(&root_dir, &path, &options)?;
 
-        match substitute(&read_to_string(path.clone())?, &env) {
-            Ok(buf) => {
-                let root_dir = root_dir.clone();
-                let file_path = path.clone();
-                let handle = tokio::spawn(async move {
-                    make_request(&buf, &root_dir, &file_path).await
-                });
-
-                let state = AppState::RunningRequest {
-                    handle,
-                    progress: Progress,
-                };
-                return Ok(Some(Intent::ChangeState(state)));
-            }
+        let intent = match substitute(&read_to_string(path.clone())?, &env) {
+            Ok(prepared_request) => Some(Intent::SendRequest {
+                file_path,
+                prepared_request,
+            }),
             Err(err) => match err {
-                // FIXME: Return Intent here too ("Prompt", "Select")
                 SubstituteError::MultipleValuesFound { key, values } => {
-                    let component = Select::new(
-                        format!("Select substitution value for {{{{{key}}}}}",),
-                        key.clone(),
-                        values.clone(),
-                    );
-
-                    let state = AppState::PendingValue {
+                    Some(Intent::AskForValue {
                         key,
                         file_path,
                         pending_options: options,
-                        pending_state: PendingState::Select { component },
-                    };
-                    return Ok(Some(Intent::ChangeState(state)));
+                        params: AskForValueParams::Select { values },
+                    })
                 }
                 SubstituteError::ValueNotFound { key, fallback } => {
-                    let component =
-                        Prompt::new(format!("Enter value for {key}"))
-                            .with_fallback(fallback);
-
-                    let state = AppState::PendingValue {
+                    Some(Intent::AskForValue {
                         key,
                         file_path,
                         pending_options: options,
-                        pending_state: PendingState::Prompt { component },
-                    };
-                    return Ok(Some(Intent::ChangeState(state)));
+                        params: AskForValueParams::Prompt { fallback },
+                    })
                 }
-                e => bail!(e),
+                other_err => Some(Intent::ShowError(other_err.to_string())),
             },
-        }
+        };
+
+        Ok(intent)
+    }
+
+    fn send_request(
+        &mut self,
+        file_path: String,
+        prepared_request: String,
+    ) -> Result<Option<Intent>> {
+        let root_dir = self.root_dir.clone();
+        let file_path = PathBuf::from(file_path);
+
+        let handle = tokio::spawn(async move {
+            make_request(&prepared_request, &root_dir, &file_path).await
+        });
+
+        let state = AppState::RunningRequest {
+            handle,
+            progress: Progress,
+        };
+
+        Ok(Some(Intent::ChangeState(state)))
     }
 }
 
@@ -299,7 +354,7 @@ impl Component for App {
                                             // the pending_state
                                             pending_options
                                                 .push((key.clone(), value));
-                                            return Some(TryRequest(
+                                            return Some(PrepareRequest(
                                                 file_path.clone(),
                                                 pending_options.clone(),
                                             ));
@@ -321,7 +376,7 @@ impl Component for App {
                                         PromptIntent::Accept(value) => {
                                             pending_options
                                                 .push((key.clone(), value));
-                                            return Some(TryRequest(
+                                            return Some(PrepareRequest(
                                                 file_path.clone(),
                                                 pending_options.clone(),
                                             ));
@@ -340,8 +395,7 @@ impl Component for App {
                             match intent {
                                 SelectIntent::Abort => (),
                                 SelectIntent::Accept(file_path) => {
-                                    // FIXME: Get selection here
-                                    return Some(TryRequest(
+                                    return Some(PrepareRequest(
                                         file_path,
                                         Vec::new(),
                                     ));
