@@ -43,6 +43,7 @@ pub struct App {
     output_view: OutputView,
 
     state: AppState,
+    error: Option<String>,
     should_quit: bool,
 }
 
@@ -75,11 +76,10 @@ pub enum PendingState {
 pub enum AppAction {
     Quit,
     TryRequest(String, Vec<(String, String)>),
-    AcceptSubstitution(Vec<(String, String)>),
     ChangeState(AppState),
     SelectTarget,
     AcceptSelectTarget(String),
-    ShowError(anyhow::Error),
+    ShowError(String),
 }
 
 impl App {
@@ -102,6 +102,7 @@ impl App {
             request_selector,
             output_view: OutputView::default(),
             state: AppState::Idle,
+            error: None,
             should_quit: false,
         })
     }
@@ -125,7 +126,7 @@ impl App {
             while let Some(action) = pending_action {
                 pending_action = match self.dispatch(action) {
                     Ok(it) => it,
-                    Err(err) => Some(AppAction::ShowError(err)),
+                    Err(err) => Some(AppAction::ShowError(err.to_string())),
                 };
             }
         }
@@ -141,18 +142,15 @@ impl App {
                 self.should_quit = true;
             }
             ChangeState(state) => {
+                self.error = None;
                 self.state = state;
             }
             TryRequest(file_path, options) => {
-                self.try_request(file_path, options)?;
-            }
-            AcceptSubstitution(options) => {
-                todo!();
-                // return Ok(Some(TryRequest(options)));
+                let res = self.try_request(file_path, options)?;
+                return Ok(res);
             }
             SelectTarget => {
                 let envs = find_environments(&self.root_dir)?;
-
                 let component =
                     Select::new("Select target".into(), "target".into(), envs);
 
@@ -164,7 +162,9 @@ impl App {
                 set_target(&self.root_dir, &s)?;
                 return Ok(Some(ChangeState(AppState::Idle)));
             }
-            ShowError(err) => todo!(),
+            ShowError(err) => {
+                self.error = Some(err);
+            }
         }
 
         Ok(None)
@@ -186,7 +186,7 @@ impl App {
         &mut self,
         file_path: String,
         options: Vec<(String, String)>,
-    ) -> Result<(), anyhow::Error> {
+    ) -> Result<Option<AppAction>> {
         let root_dir = self.root_dir.clone();
 
         let path = PathBuf::from(file_path.clone());
@@ -200,10 +200,11 @@ impl App {
                     make_request(&buf, &root_dir, &file_path).await
                 });
 
-                self.state = AppState::RunningRequest {
+                let state = AppState::RunningRequest {
                     handle,
                     progress: Progress,
                 };
+                return Ok(Some(AppAction::ChangeState(state)));
             }
             Err(err) => match err {
                 // FIXME: Return Actions here too ("Prompt", "Select")
@@ -214,29 +215,30 @@ impl App {
                         values.clone(),
                     );
 
-                    self.state = AppState::PendingValue {
+                    let state = AppState::PendingValue {
                         key,
                         file_path,
                         pending_options: options,
                         pending_state: PendingState::Select { component },
                     };
+                    return Ok(Some(AppAction::ChangeState(state)));
                 }
                 SubstituteError::ValueNotFound { key, fallback } => {
                     let component =
                         Prompt::new(format!("Enter value for {key}"))
                             .with_fallback(fallback);
-                    self.state = AppState::PendingValue {
+
+                    let state = AppState::PendingValue {
                         key,
                         file_path,
                         pending_options: options,
                         pending_state: PendingState::Prompt { component },
                     };
+                    return Ok(Some(AppAction::ChangeState(state)));
                 }
                 e => bail!(e),
             },
         }
-
-        Ok(())
     }
 }
 
@@ -285,7 +287,7 @@ impl Component for App {
                                                     Some(Value::String(value)) => value.clone(),
                                                     Some(value) => value.to_string(),
                                                     _ => return Some(ShowError(
-                                                    anyhow::anyhow!("Replacement not found: {key}"),
+                                                    format!("Replacement not found: {key}"),
 )),
                                                 },
                                                 other => other.to_string(),
@@ -401,8 +403,12 @@ impl App {
     }
 
     fn render_status(&mut self, frame: &mut Frame, area: Rect) {
-        let status_line = Paragraph::new("Ctrl+S: Select target")
-            .style(Style::new().dark_gray());
+        let status_line = match &self.error {
+            Some(msg) => Paragraph::new(msg.clone()).white().on_red(),
+            None => Paragraph::new("Ctrl+S: Select target")
+                .style(Style::new().dark_gray()),
+        };
+
         frame.render_widget(status_line, area);
     }
 
