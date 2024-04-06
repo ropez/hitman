@@ -28,12 +28,13 @@ use hitman::{
 };
 
 use super::{
+    centered,
     keymap::{mapkey, KeyMapping},
     output::OutputView,
     progress::Progress,
     prompt::{Prompt, PromptCommand},
     select::{RequestSelector, Select, SelectCommand, SelectItem},
-    Component, centered,
+    Component,
 };
 
 pub struct App {
@@ -49,6 +50,7 @@ pub enum AppState {
     Idle,
 
     PendingValue {
+        file_path: String,
         key: String,
         pending_options: Vec<(String, String)>,
 
@@ -70,11 +72,14 @@ pub enum PendingState {
     Select { component: Select<Value> },
 }
 
-pub enum AppCommand {
+pub enum AppAction {
     Quit,
-    TryRequest,
+    TryRequest(String, Vec<(String, String)>),
+    AcceptSubstitution(Vec<(String, String)>),
     ChangeState(AppState),
     SelectTarget,
+    AcceptSelectTarget(String),
+    ShowError(anyhow::Error),
 }
 
 impl App {
@@ -106,7 +111,7 @@ impl App {
         B: Backend,
     {
         while !self.should_quit {
-            terminal.draw(|frame| self.render_ui(frame))?;
+            terminal.draw(|frame| self.render_ui(frame, frame.size()))?;
 
             if let AppState::RunningRequest { handle, .. } = &mut self.state {
                 if handle.is_finished() {
@@ -116,57 +121,269 @@ impl App {
                 }
             }
 
-            let mut command_opt = self.handle_events()?;
-            while let Some(command) = command_opt {
-                command_opt = self.handle_command(command)?;
+            let mut pending_action = self.handle_events()?;
+            while let Some(action) = pending_action {
+                pending_action = match self.dispatch(action) {
+                    Ok(it) => it,
+                    Err(err) => Some(AppAction::ShowError(err)),
+                };
             }
         }
 
         Ok(())
     }
 
-    fn handle_command(
-        &mut self,
-        command: AppCommand,
-    ) -> Result<Option<AppCommand>> {
-        use AppCommand::*;
+    fn dispatch(&mut self, action: AppAction) -> Result<Option<AppAction>> {
+        use AppAction::*;
 
-        match command {
+        match action {
             Quit => {
                 self.should_quit = true;
             }
             ChangeState(state) => {
                 self.state = state;
             }
-            TryRequest => {
-                self.try_request()?;
+            TryRequest(file_path, options) => {
+                self.try_request(file_path, options)?;
+            }
+            AcceptSubstitution(options) => {
+                todo!();
+                // return Ok(Some(TryRequest(options)));
             }
             SelectTarget => {
                 let envs = find_environments(&self.root_dir)?;
 
-                let component = Select::new("Select target".into(), "target".into(), envs);
+                let component =
+                    Select::new("Select target".into(), "target".into(), envs);
 
                 return Ok(Some(ChangeState(AppState::SelectTarget {
                     component,
                 })));
             }
+            AcceptSelectTarget(s) => {
+                set_target(&self.root_dir, &s)?;
+                return Ok(Some(ChangeState(AppState::Idle)));
+            }
+            ShowError(err) => todo!(),
         }
 
         Ok(None)
     }
 
-    fn render_ui(&mut self, frame: &mut Frame) {
+    fn handle_events(&mut self) -> Result<Option<AppAction>> {
+        // FIXME: Detect state changes, and avoid rerender
+
+        if event::poll(Duration::from_millis(50))? {
+            let event = event::read()?;
+
+            return Ok(self.handle_event(&event));
+        }
+
+        Ok(None)
+    }
+
+    fn try_request(
+        &mut self,
+        file_path: String,
+        options: Vec<(String, String)>,
+    ) -> Result<(), anyhow::Error> {
+        let root_dir = self.root_dir.clone();
+
+        let path = PathBuf::from(file_path.clone());
+        let env = load_env(&root_dir, &path, &options)?;
+
+        match substitute(&read_to_string(path.clone())?, &env) {
+            Ok(buf) => {
+                let root_dir = root_dir.clone();
+                let file_path = path.clone();
+                let handle = tokio::spawn(async move {
+                    make_request(&buf, &root_dir, &file_path).await
+                });
+
+                self.state = AppState::RunningRequest {
+                    handle,
+                    progress: Progress,
+                };
+            }
+            Err(err) => match err {
+                // FIXME: Return Actions here too ("Prompt", "Select")
+                SubstituteError::MultipleValuesFound { key, values } => {
+                    let component = Select::new(
+                        format!("Select substitution value for {{{{{key}}}}}",),
+                        key.clone(),
+                        values.clone(),
+                    );
+
+                    self.state = AppState::PendingValue {
+                        key,
+                        file_path,
+                        pending_options: options,
+                        pending_state: PendingState::Select { component },
+                    };
+                }
+                SubstituteError::ValueNotFound { key, fallback } => {
+                    let component =
+                        Prompt::new(format!("Enter value for {key}"))
+                            .with_fallback(fallback);
+                    self.state = AppState::PendingValue {
+                        key,
+                        file_path,
+                        pending_options: options,
+                        pending_state: PendingState::Prompt { component },
+                    };
+                }
+                e => bail!(e),
+            },
+        }
+
+        Ok(())
+    }
+}
+
+impl Component for App {
+    type Command = AppAction;
+
+    fn render_ui(&mut self, frame: &mut Frame, area: Rect) {
         let layout = Layout::new(
             Direction::Vertical,
             [Constraint::Min(0), Constraint::Length(1)],
         )
-        .split(frame.size());
+        .split(area);
 
         self.render_main(frame, layout[0]);
         self.render_status(frame, layout[1]);
         self.render_popup(frame);
     }
 
+    fn handle_event(&mut self, event: &Event) -> Option<Self::Command> {
+        use AppAction::*;
+
+        if let Event::Key(key) = event {
+            if key.kind == KeyEventKind::Press {
+                match &mut self.state {
+                    AppState::PendingValue {
+                        key,
+                        file_path,
+                        pending_options,
+                        pending_state,
+                        ..
+                    } => {
+                        match pending_state {
+                            PendingState::Select { component } => {
+                                if let Some(command) =
+                                    component.handle_event(&event)
+                                {
+                                    match command {
+                                        SelectCommand::Abort => {
+                                            return Some(ChangeState(
+                                                AppState::Idle,
+                                            ));
+                                        }
+                                        SelectCommand::Accept(selected) => {
+                                            let value = match selected {
+                                                Value::Table(t) => match t.get("value") {
+                                                    Some(Value::String(value)) => value.clone(),
+                                                    Some(value) => value.to_string(),
+                                                    _ => return Some(ShowError(
+                                                    anyhow::anyhow!("Replacement not found: {key}"),
+)),
+                                                },
+                                                other => other.to_string(),
+                                            };
+
+                                            // XXX Maybe we can simplify this by emitting
+                                            // the pending_state
+                                            pending_options
+                                                .push((key.clone(), value));
+                                            return Some(TryRequest(
+                                                file_path.clone(),
+                                                pending_options.clone(),
+                                            ));
+                                        }
+                                    }
+                                }
+                                return None;
+                            }
+                            PendingState::Prompt { component } => {
+                                if let Some(command) =
+                                    component.handle_event(&event)
+                                {
+                                    match command {
+                                        PromptCommand::Abort => {
+                                            return Some(ChangeState(
+                                                AppState::Idle,
+                                            ));
+                                        }
+                                        PromptCommand::Accept(value) => {
+                                            pending_options
+                                                .push((key.clone(), value));
+                                            return Some(TryRequest(
+                                                file_path.clone(),
+                                                pending_options.clone(),
+                                            ));
+                                        }
+                                    }
+                                }
+                                return None;
+                            }
+                        }
+                    }
+
+                    AppState::Idle => {
+                        if let Some(command) =
+                            self.request_selector.handle_event(&event)
+                        {
+                            match command {
+                                SelectCommand::Abort => (),
+                                SelectCommand::Accept(file_path) => {
+                                    // FIXME: Get selection here
+                                    return Some(TryRequest(
+                                        file_path,
+                                        Vec::new(),
+                                    ));
+                                }
+                            }
+                        }
+
+                        self.output_view.handle_event(&event);
+
+                        match mapkey(&event) {
+                            KeyMapping::Abort => return Some(AppAction::Quit),
+                            KeyMapping::SelectTarget => {
+                                return Some(AppAction::SelectTarget);
+                            }
+                            _ => (),
+                        }
+                    }
+
+                    AppState::RunningRequest { handle, .. } => {
+                        if let KeyMapping::Abort = mapkey(&event) {
+                            handle.abort();
+                            return Some(ChangeState(AppState::Idle));
+                        }
+                    }
+
+                    AppState::SelectTarget { component } => {
+                        if let Some(command) = component.handle_event(&event) {
+                            match command {
+                                SelectCommand::Abort => {
+                                    return Some(ChangeState(AppState::Idle));
+                                }
+                                SelectCommand::Accept(s) => {
+                                    return Some(AcceptSelectTarget(s));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        None
+    }
+}
+
+impl App {
     fn render_main(&mut self, frame: &mut Frame, area: Rect) {
         let layout = Layout::new(
             Direction::Horizontal,
@@ -215,203 +432,6 @@ impl App {
 
             _ => (),
         }
-    }
-
-    fn handle_events(&mut self) -> Result<Option<AppCommand>> {
-        // FIXME: Detect state changes, and avoid rerender
-
-        use AppCommand::*;
-
-        if event::poll(Duration::from_millis(50))? {
-            let event = event::read()?;
-            if let Event::Key(key) = event {
-                if key.kind == KeyEventKind::Press {
-                    match &mut self.state {
-                        AppState::PendingValue { pending_state, .. } => {
-                            match pending_state {
-                                PendingState::Select { component } => {
-                                    if let Some(command) =
-                                        component.handle_event(&event)
-                                    {
-                                        match command {
-                                            SelectCommand::Abort => {
-                                                return Ok(Some(ChangeState(
-                                                    AppState::Idle,
-                                                )));
-                                            }
-                                            SelectCommand::Accept(_) => {
-                                                // FIXME: Get result here
-                                                return Ok(Some(TryRequest));
-                                            }
-                                        }
-                                    }
-                                    return Ok(None);
-                                }
-                                PendingState::Prompt { component } => {
-                                    if let Some(command) =
-                                        component.handle_event(&event)
-                                    {
-                                        match command {
-                                            PromptCommand::Abort => {
-                                                return Ok(Some(ChangeState(
-                                                    AppState::Idle,
-                                                )));
-                                            }
-                                            PromptCommand::Accept(_) => {
-                                                // FIXME: Get result here
-                                                return Ok(Some(TryRequest));
-                                            }
-                                        }
-                                    }
-                                    return Ok(None);
-                                }
-                            }
-                        }
-
-                        AppState::Idle => {
-                            if let Some(command) =
-                                self.request_selector.handle_event(&event)
-                            {
-                                match command {
-                                    SelectCommand::Abort => (),
-                                    SelectCommand::Accept(_) => {
-                                        // FIXME: Get selection here
-                                        return Ok(Some(TryRequest));
-                                    }
-                                }
-                            }
-
-                            self.output_view.handle_event(&event);
-
-                            match mapkey(&event) {
-                                KeyMapping::Abort => {
-                                    return Ok(Some(AppCommand::Quit))
-                                }
-                                KeyMapping::SelectTarget => {
-                                    return Ok(Some(AppCommand::SelectTarget));
-                                }
-                                _ => (),
-                            }
-                        }
-
-                        AppState::RunningRequest { handle, .. } => {
-                            if let KeyMapping::Abort = mapkey(&event) {
-                                handle.abort();
-                                return Ok(Some(ChangeState(AppState::Idle)));
-                            }
-                        }
-
-                        AppState::SelectTarget { component } => {
-                            if let Some(command) =
-                                component.handle_event(&event)
-                            {
-                                match command {
-                                    SelectCommand::Abort => {
-                                        return Ok(Some(ChangeState(
-                                            AppState::Idle,
-                                        )));
-                                    }
-                                    SelectCommand::Accept(s) => {
-                                        set_target(&self.root_dir, &s)?;
-                                        return Ok(Some(ChangeState(
-                                            AppState::Idle,
-                                        )));
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        Ok(None)
-    }
-
-    fn try_request(&mut self) -> Result<(), anyhow::Error> {
-        if let Some(file_path) = self.request_selector.selected_path() {
-            let root_dir = self.root_dir.clone();
-
-            let mut pending_options = match &self.state {
-                AppState::PendingValue {
-                    pending_options, ..
-                } => pending_options.clone(),
-                _ => Vec::new(),
-            };
-
-            if let AppState::PendingValue {
-                key, pending_state, ..
-            } = &self.state
-            {
-                match pending_state {
-                    PendingState::Prompt { component } => {
-                        let value = component.value();
-                        pending_options.push((key.clone(), value));
-                    }
-                    PendingState::Select { component } => {
-                        if let Some(selected) = component.selected_item() {
-                            let value = match selected {
-                                Value::Table(t) => match t.get("value") {
-                                    Some(Value::String(value)) => value.clone(),
-                                    Some(value) => value.to_string(),
-                                    _ => bail!("Replacement not found: {key}"),
-                                },
-                                other => other.to_string(),
-                            };
-
-                            pending_options.push((key.clone(), value));
-                        }
-                    }
-                }
-            }
-
-            let path = PathBuf::from(file_path);
-            let env = load_env(&root_dir, &path, &pending_options)?;
-
-            match substitute(&read_to_string(path.clone())?, &env) {
-                Ok(buf) => {
-                    let root_dir = root_dir.clone();
-                    let file_path = path.clone();
-                    let handle = tokio::spawn(async move {
-                        make_request(&buf, &root_dir, &file_path).await
-                    });
-
-                    self.state = AppState::RunningRequest {
-                        handle,
-                        progress: Progress,
-                    };
-                }
-                Err(err) => match err {
-                    SubstituteError::MultipleValuesFound { key, values } => {
-                        let component = Select::new(
-                            format!(
-                                "Select substitution value for {{{{{key}}}}}",
-                            ),
-                            key.clone(),
-                            values.clone(),
-                        );
-
-                        self.state = AppState::PendingValue {
-                            key,
-                            pending_options,
-                            pending_state: PendingState::Select { component },
-                        };
-                    }
-                    SubstituteError::ValueNotFound { key, fallback } => {
-                        let component =
-                            Prompt::new(format!("Enter value for {key}")).with_fallback(fallback);
-                        self.state = AppState::PendingValue {
-                            key,
-                            pending_options,
-                            pending_state: PendingState::Prompt { component },
-                        };
-                    }
-                    e => bail!(e),
-                },
-            }
-        }
-
-        Ok(())
     }
 }
 

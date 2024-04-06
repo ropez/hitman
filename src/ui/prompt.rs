@@ -38,7 +38,7 @@ impl Prompt {
         }
     }
 
-    pub fn value(&self) -> String {
+    fn value(&self) -> String {
         let input_value = self.input.value().to_string();
         if input_value.len() > 0 {
             input_value
