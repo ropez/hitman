@@ -129,9 +129,7 @@ pub fn load_env(
 ) -> Result<TomlTable> {
     use Value::Table;
 
-    let target = read_to_string(root_dir.join(TARGET_FILE))
-        .map(|t| t.trim().to_string())
-        .unwrap_or("default".to_string());
+    let target = get_target(root_dir);
 
     let mut env = TomlTable::new();
 
@@ -167,6 +165,13 @@ pub fn load_env(
     }
 
     Ok(env)
+}
+
+pub fn get_target(root_dir: &Path) -> String {
+    let target = read_to_string(root_dir.join(TARGET_FILE))
+        .map(|t| t.trim().to_string())
+        .unwrap_or("default".to_string());
+    target
 }
 
 pub fn update_data(vars: &TomlTable) -> Result<()> {

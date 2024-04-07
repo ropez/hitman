@@ -116,12 +116,7 @@ where
             search_input: Input::default(),
         }
     }
-}
 
-impl<T> Select<T>
-where
-    T: SelectItem + Clone,
-{
     pub fn selected_item(&self) -> Option<&T> {
         if let Some(i) = self.list_state.selected() {
             let filtered = &self.get_filtered_items();

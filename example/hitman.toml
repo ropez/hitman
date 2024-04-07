@@ -1,2 +1,5 @@
 [default]
 base_url = 'https://api.github.com'
+
+[alternative]
+base_url = 'https://api.github.com'

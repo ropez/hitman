@@ -9,7 +9,7 @@ use anyhow::{Context, Result};
 use crossterm::event::{self, Event, KeyEventKind};
 use ratatui::{
     backend::Backend,
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::{Constraint, Direction, Layout, Margin, Rect},
     style::{Style, Stylize},
     widgets::Paragraph,
     Frame, Terminal,
@@ -19,8 +19,8 @@ use toml::Value;
 
 use hitman::{
     env::{
-        find_available_requests, find_environments, find_root_dir, load_env,
-        set_target, update_data,
+        find_available_requests, find_environments, find_root_dir, get_target,
+        load_env, set_target, update_data,
     },
     extract::extract_variables,
     request::{build_client, do_request},
@@ -39,6 +39,7 @@ use super::{
 
 pub struct App {
     root_dir: PathBuf,
+    target: String,
     request_selector: RequestSelector,
     output_view: OutputView,
 
@@ -101,6 +102,8 @@ impl App {
     pub fn new() -> Result<Self> {
         let root_dir = find_root_dir()?.context("No hitman.toml found")?;
 
+        let target = get_target(&root_dir);
+
         // FIXME: Need to live update requests
 
         let reqs = find_available_requests(&root_dir)?;
@@ -114,6 +117,7 @@ impl App {
 
         Ok(Self {
             root_dir,
+            target,
             request_selector,
             output_view: OutputView::default(),
             state: AppState::Idle,
@@ -214,6 +218,7 @@ impl App {
             }
             AcceptSelectTarget(s) => {
                 set_target(&self.root_dir, &s)?;
+                self.target = s;
                 Some(ChangeState(AppState::Idle))
             }
             ShowError(err) => {
@@ -459,13 +464,28 @@ impl App {
     }
 
     fn render_status(&mut self, frame: &mut Frame, area: Rect) {
+        let area = area.inner(&Margin::new(1, 0));
+
+        let layout = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Length(24), Constraint::Fill(1)])
+            .split(area);
+
+        frame.render_widget(
+            Paragraph::new(self.target.as_str())
+                .centered()
+                .black()
+                .on_cyan(),
+            layout[0],
+        );
+
         let status_line = match &self.error {
             Some(msg) => Paragraph::new(msg.clone()).white().on_red(),
-            None => Paragraph::new("Ctrl+S: Select target")
+            None => Paragraph::new(" Ctrl+S: Select target")
                 .style(Style::new().dark_gray()),
         };
 
-        frame.render_widget(status_line, area);
+        frame.render_widget(status_line, layout[1]);
     }
 
     fn render_popup(&mut self, frame: &mut Frame) {
