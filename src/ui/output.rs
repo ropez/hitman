@@ -47,9 +47,9 @@ impl Component for OutputView {
         let req_lines =
             self.request.lines().map(|line| Line::styled(line, blue));
 
-        let yellow = Style::new().yellow();
+        let green = Style::new().green();
         let res_lines =
-            self.response.lines().map(|line| Line::styled(line, yellow));
+            self.response.lines().map(|line| Line::styled(line, green));
 
         let lines: Vec<Line> = req_lines.chain(res_lines).collect();
 
