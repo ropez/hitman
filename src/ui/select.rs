@@ -20,7 +20,7 @@ use super::{
 
 #[derive(Default)]
 pub struct RequestSelector {
-    selector: Select<String>,
+    pub selector: Select<String>,
 }
 
 impl RequestSelector {

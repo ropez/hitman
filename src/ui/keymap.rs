@@ -10,6 +10,7 @@ pub enum KeyMapping {
     ScrollUp,
     ScrollDown,
     SelectTarget,
+    Editor,
 }
 
 pub fn mapkey(event: &Event) -> KeyMapping {
@@ -22,6 +23,7 @@ pub fn mapkey(event: &Event) -> KeyMapping {
                 KeyCode::Char('u') => return KeyMapping::ScrollUp,
                 KeyCode::Char('d') => return KeyMapping::ScrollDown,
                 KeyCode::Char('s') => return KeyMapping::SelectTarget,
+                KeyCode::Char('e') => return KeyMapping::Editor,
                 _ => (),
             }
         }

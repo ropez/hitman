@@ -1,6 +1,7 @@
 use std::{
     fmt::Write,
     fs::read_to_string,
+    io,
     path::{Path, PathBuf},
     time::Duration,
 };
@@ -36,6 +37,11 @@ use super::{
     select::{RequestSelector, Select, SelectIntent, SelectItem},
     Component,
 };
+
+pub trait Screen {
+    fn enter(&self) -> io::Result<()>;
+    fn leave(&self) -> io::Result<()>;
+}
 
 pub struct App {
     root_dir: PathBuf,
@@ -90,6 +96,7 @@ pub enum Intent {
     ChangeState(AppState),
     SelectTarget,
     AcceptSelectTarget(String),
+    EditRequest,
     ShowError(String),
 }
 
@@ -126,10 +133,17 @@ impl App {
         })
     }
 
-    pub async fn run<B>(&mut self, mut terminal: Terminal<B>) -> Result<()>
+    pub async fn run<B, S>(
+        &mut self,
+        mut terminal: Terminal<B>,
+        mut screen: S,
+    ) -> Result<()>
     where
         B: Backend,
+        S: Screen,
     {
+        screen.enter()?;
+
         while !self.should_quit {
             if let AppState::RunningRequest { handle, .. } = &mut self.state {
                 if handle.is_finished() {
@@ -143,17 +157,29 @@ impl App {
 
             let mut pending_intent = self.process_events()?;
             while let Some(intent) = pending_intent {
-                pending_intent = match self.dispatch(intent) {
-                    Ok(it) => it,
-                    Err(err) => Some(Intent::ShowError(err.to_string())),
-                };
+                pending_intent =
+                    match self.dispatch(intent, &mut terminal, &mut screen) {
+                        Ok(it) => it,
+                        Err(err) => Some(Intent::ShowError(err.to_string())),
+                    };
             }
         }
+
+        screen.leave()?;
 
         Ok(())
     }
 
-    fn dispatch(&mut self, intent: Intent) -> Result<Option<Intent>> {
+    fn dispatch<B, S>(
+        &mut self,
+        intent: Intent,
+        terminal: &mut Terminal<B>,
+        screen: &mut S,
+    ) -> Result<Option<Intent>>
+    where
+        B: Backend,
+        S: Screen,
+    {
         use Intent::*;
 
         Ok(match intent {
@@ -220,6 +246,23 @@ impl App {
                 set_target(&self.root_dir, &s)?;
                 self.target = s;
                 Some(ChangeState(AppState::Idle))
+            }
+            EditRequest => {
+                if let Some(selected) =
+                    self.request_selector.selector.selected_item()
+                {
+                    let editor = std::env::var("EDITOR")
+                        .context("EDITOR environment variable not set")?;
+
+                    screen.leave()?;
+                    let _ = std::process::Command::new(editor)
+                        .arg(selected)
+                        .status();
+
+                    screen.enter()?;
+                    terminal.clear()?;
+                }
+                None
             }
             ShowError(err) => {
                 self.error = Some(err);
@@ -411,6 +454,9 @@ impl Component for App {
                         self.output_view.handle_event(&event);
 
                         match mapkey(&event) {
+                            KeyMapping::Editor => {
+                                return Some(Intent::EditRequest)
+                            }
                             KeyMapping::Abort => return Some(Intent::Quit),
                             KeyMapping::SelectTarget => {
                                 return Some(Intent::SelectTarget);
@@ -481,8 +527,10 @@ impl App {
 
         let status_line = match &self.error {
             Some(msg) => Paragraph::new(msg.clone()).white().on_red(),
-            None => Paragraph::new(" Ctrl+S: Select target")
-                .style(Style::new().dark_gray()),
+            None => Paragraph::new(
+                " Ctrl+S: Select target, Ctrl+E: Edit selected request",
+            )
+            .style(Style::new().dark_gray()),
         };
 
         frame.render_widget(status_line, layout[1]);
