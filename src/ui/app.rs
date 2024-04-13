@@ -252,9 +252,8 @@ impl App {
                 Some(ChangeState(AppState::Idle))
             }
             EditRequest => {
-                if let Some(selected) =
-                    self.request_selector.selector.selected_item()
-                {
+                let selected_item = self.request_selector.selector.selected_item();
+                if let Some(selected) = selected_item {
                     let editor = std::env::var("EDITOR")
                         .context("EDITOR environment variable not set")?;
 
@@ -266,7 +265,7 @@ impl App {
                     screen.enter()?;
                     terminal.clear()?;
                 }
-                None
+                Some(PreviewRequest(selected_item.cloned()))
             }
             ShowError(err) => {
                 self.error = Some(err);

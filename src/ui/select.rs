@@ -251,14 +251,15 @@ where
             KeyMapping::Abort => {
                 return Some(SelectIntent::Abort);
             }
-            _ => (),
-        }
-
-        if let Some(change) = self.search_input.handle_event(event) {
-            if change.value {
-                self.select_first();
-                return Some(SelectIntent::Change(self.selected_item().cloned()));
+            KeyMapping::None => {
+                if let Some(change) = self.search_input.handle_event(event) {
+                    if change.value {
+                        self.select_first();
+                        return Some(SelectIntent::Change(self.selected_item().cloned()));
+                    }
+                }
             }
+            _ => (),
         }
 
         None
