@@ -101,6 +101,7 @@ where
 {
     Abort,
     Accept(T),
+    Change(Option<T>),
 }
 
 impl<T> Select<T>
@@ -236,11 +237,11 @@ where
         match mapkey(event) {
             KeyMapping::Up => {
                 self.select_prev();
-                return None;
+                return Some(SelectIntent::Change(self.selected_item().cloned()));
             }
             KeyMapping::Down => {
                 self.select_next();
-                return None;
+                return Some(SelectIntent::Change(self.selected_item().cloned()));
             }
             KeyMapping::Accept => {
                 if let Some(item) = self.selected_item() {
@@ -256,6 +257,7 @@ where
         if let Some(change) = self.search_input.handle_event(event) {
             if change.value {
                 self.select_first();
+                return Some(SelectIntent::Change(self.selected_item().cloned()));
             }
         }
 
