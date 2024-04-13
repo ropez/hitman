@@ -3,6 +3,7 @@ use httparse::Status::*;
 use log::{info, log_enabled, warn, Level};
 use reqwest::{Client, Method, Response, Url};
 use serde_json::Value;
+use spinoff::{Spinner, spinners, Color, Streams};
 use std::{
     fs::read_to_string,
     path::Path,
@@ -39,10 +40,10 @@ pub async fn make_request(file_path: &Path, env: &Table) -> Result<()> {
     clear_screen();
     print_request(&buf);
 
-    // let mut spinner =
-    //     Spinner::new_with_stream(spinners::BouncingBar, "", Color::Yellow, Streams::Stderr);
+    let mut spinner =
+        Spinner::new_with_stream(spinners::BouncingBar, "", Color::Yellow, Streams::Stderr);
     let (response, elapsed) = do_request(&client, &buf).await?;
-    // spinner.stop();
+    spinner.stop();
 
     print_response(&response)?;
 
