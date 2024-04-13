@@ -11,7 +11,7 @@ use crossterm::event::{self, Event, KeyEventKind};
 use ratatui::{
     backend::Backend,
     layout::{Constraint, Direction, Layout, Margin, Rect},
-    style::{Style, Stylize},
+    style::Stylize,
     widgets::Paragraph,
     Frame, Terminal,
 };
@@ -83,6 +83,7 @@ pub enum PendingState {
 pub enum Intent {
     Quit,
     PrepareRequest(String, Vec<(String, String)>),
+    PreviewRequest(Option<String>),
     SendRequest {
         file_path: String,
         prepared_request: String,
@@ -145,17 +146,9 @@ impl App {
         screen.enter()?;
 
         while !self.should_quit {
-            if let AppState::RunningRequest { handle, .. } = &mut self.state {
-                if handle.is_finished() {
-                    let (request, response) = handle.await??;
-                    self.output_view.update(request, response);
-                    self.state = AppState::Idle;
-                }
-            }
-
             terminal.draw(|frame| self.render_ui(frame, frame.size()))?;
 
-            let mut pending_intent = self.process_events()?;
+            let mut pending_intent = self.process_events().await?;
             while let Some(intent) = pending_intent {
                 pending_intent =
                     match self.dispatch(intent, &mut terminal, &mut screen) {
@@ -195,10 +188,21 @@ impl App {
             PrepareRequest(file_path, options) => {
                 self.try_request(file_path, options)?
             }
+            PreviewRequest(file_path) => {
+                self.preview_request(file_path)?;
+                None
+            }
             SendRequest {
                 file_path,
                 prepared_request,
-            } => self.send_request(file_path, prepared_request)?,
+            } => {
+                let mut req = HttpMessage::default();
+                for line in prepared_request.lines() {
+                    writeln!(req.header, "> {}", line)?;
+                }
+                self.output_view.update(req, HttpMessage::default());
+                self.send_request(file_path, prepared_request)?
+            }
             AskForValue {
                 key,
                 file_path,
@@ -223,7 +227,7 @@ impl App {
 
                 AskForValueParams::Prompt { fallback } => {
                     let component =
-                        Prompt::new(format!("Enter value for {key}"))
+                        Prompt::new(format!("Enter value for {{{{{key}}}}}"))
                             .with_fallback(fallback);
 
                     let state = AppState::PendingValue {
@@ -266,12 +270,13 @@ impl App {
             }
             ShowError(err) => {
                 self.error = Some(err);
+                self.state = AppState::Idle;
                 None
             }
         })
     }
 
-    fn process_events(&mut self) -> Result<Option<Intent>> {
+    async fn process_events(&mut self) -> Result<Option<Intent>> {
         // Don't waste so much CPU when idle
         let poll_timeout = match self.state {
             AppState::RunningRequest { .. } => Duration::from_millis(50),
@@ -282,6 +287,25 @@ impl App {
             let event = event::read()?;
 
             return Ok(self.handle_event(&event));
+        }
+
+        if let AppState::RunningRequest { handle, .. } = &mut self.state {
+            if handle.is_finished() {
+                return Ok(match handle.await {
+                    Ok(res) => match res {
+                        Ok((request, response)) => {
+                            // FIXME: Intent to update output
+                            self.output_view.update(request, response);
+                            Some(Intent::ChangeState(AppState::Idle))
+                        }
+                        Err(err) => {
+                            self.output_view.show_error(err.to_string());
+                            Some(Intent::ChangeState(AppState::Idle))
+                        }
+                    },
+                    Err(err) => Some(Intent::ShowError(err.to_string())),
+                });
+            }
         }
 
         Ok(None)
@@ -324,6 +348,25 @@ impl App {
         };
 
         Ok(intent)
+    }
+
+    fn preview_request(&mut self, file_path: Option<String>) -> Result<()> {
+        if let Some(file_path) = file_path {
+            let path = PathBuf::from(file_path.clone());
+
+            // TODO: Highlight substitutions and current values
+
+            let f = read_to_string(path.clone())?;
+            let mut req = HttpMessage::default();
+            for line in f.lines() {
+                writeln!(req.header, "{}", line)?;
+            }
+            self.output_view.update(req, HttpMessage::default());
+        } else {
+            self.output_view.reset();
+        }
+
+        Ok(())
     }
 
     fn send_request(
@@ -407,6 +450,7 @@ impl Component for App {
                                                 pending_options.clone(),
                                             ));
                                         }
+                                        SelectIntent::Change(_) => (),
                                     }
                                 }
                                 return None;
@@ -448,6 +492,9 @@ impl Component for App {
                                         Vec::new(),
                                     ));
                                 }
+                                SelectIntent::Change(file_path) => {
+                                    return Some(PreviewRequest(file_path));
+                                }
                             }
                         }
 
@@ -481,6 +528,7 @@ impl Component for App {
                                 SelectIntent::Accept(s) => {
                                     return Some(AcceptSelectTarget(s));
                                 }
+                                SelectIntent::Change(_) => (),
                             }
                         }
                     }
@@ -514,7 +562,11 @@ impl App {
 
         let layout = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([Constraint::Length(24), Constraint::Fill(1)])
+            .constraints([
+                Constraint::Length(24),
+                Constraint::Length(1),
+                Constraint::Fill(1),
+            ])
             .split(area);
 
         frame.render_widget(
@@ -526,14 +578,14 @@ impl App {
         );
 
         let status_line = match &self.error {
-            Some(msg) => Paragraph::new(msg.clone()).white().on_red(),
+            Some(msg) => Paragraph::new(msg.clone()).red().reversed(),
             None => Paragraph::new(
-                " Ctrl+S: Select target, Ctrl+E: Edit selected request",
+                "Ctrl+S: Select target, Ctrl+E: Edit selected request",
             )
-            .style(Style::new().dark_gray()),
+            .dark_gray(),
         };
 
-        frame.render_widget(status_line, layout[1]);
+        frame.render_widget(status_line, layout[2]);
     }
 
     fn render_popup(&mut self, frame: &mut Frame) {
@@ -583,7 +635,7 @@ async fn make_request(
     let mut response = HttpMessage::default();
     writeln!(
         response.header,
-        "> HTTP/1.1 {} {}",
+        "< HTTP/1.1 {} {}",
         res.status().as_u16(),
         res.status().canonical_reason().unwrap_or("")
     )?;

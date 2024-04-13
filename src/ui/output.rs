@@ -3,7 +3,7 @@ use ratatui::{
     layout::Rect,
     style::{Style, Stylize},
     text::{Line, Text},
-    widgets::{Block, Borders, Paragraph},
+    widgets::{Block, Borders, Paragraph, Wrap},
     Frame,
 };
 
@@ -30,6 +30,17 @@ impl OutputView {
         self.scroll = (0, 0);
         self.request = request;
         self.response = response;
+    }
+
+    pub fn show_error(&mut self, error: String) {
+        self.response.header = "\n".to_string();
+        self.response.body = error;
+    }
+
+    pub fn reset(&mut self) {
+        self.scroll = (0, 0);
+        self.request = HttpMessage::default();
+        self.response = HttpMessage::default();
     }
 
     pub fn scroll_up(&mut self) {
@@ -64,6 +75,7 @@ impl Component for OutputView {
         let lines: Vec<Line> = req_lines.chain(res_lines).chain(res_body_lines).collect();
 
         let para = Paragraph::new(Text::from(lines))
+            .wrap(Wrap::default())
             .scroll(self.scroll)
             .block(Block::default().title("Output").borders(Borders::ALL));
 

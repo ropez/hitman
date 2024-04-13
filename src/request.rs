@@ -75,10 +75,10 @@ pub async fn do_request(client: &Client, buf: &str) -> Result<(Response, Duratio
     let mut headers = [httparse::EMPTY_HEADER; 64];
     let mut req = httparse::Request::new(&mut headers);
 
-    let parse_result = req.parse(buf.as_bytes())?;
+    let parse_result = req.parse(buf.as_bytes()).context("Invalid input: malformed request")?;
 
-    let url = req.path.context("Path should be valid")?;
-    let method = req.method.context("Method should be valid")?;
+    let method = req.method.context("Invalid input: HTTP method not found")?;
+    let url = req.path.context("Invalid input: URL not found")?;
 
     let method = Method::from_str(method)?;
     let url = Url::parse(url)?;
