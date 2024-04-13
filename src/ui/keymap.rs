@@ -1,4 +1,4 @@
-use crossterm::event::{Event, KeyCode, KeyModifiers};
+use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
 pub enum KeyMapping {
     None,
@@ -15,27 +15,32 @@ pub enum KeyMapping {
 
 pub fn mapkey(event: &Event) -> KeyMapping {
     if let Event::Key(key) = event {
-        if key.modifiers.contains(KeyModifiers::CONTROL) {
-            match key.code {
-                KeyCode::Char('j') | KeyCode::Char('n') => return KeyMapping::Down,
-                KeyCode::Char('k') | KeyCode::Char('p') => return KeyMapping::Up,
-                KeyCode::Char('c') => return KeyMapping::Abort,
-                KeyCode::Char('u') => return KeyMapping::ScrollUp,
-                KeyCode::Char('d') => return KeyMapping::ScrollDown,
-                KeyCode::Char('s') => return KeyMapping::SelectTarget,
-                KeyCode::Char('e') => return KeyMapping::Editor,
-                _ => (),
-            }
+        if key.kind == KeyEventKind::Press {
+            return mapkey_keypress(key);
         }
-
-        return match key.code {
-            KeyCode::Esc => KeyMapping::Abort,
-            KeyCode::Enter => KeyMapping::Accept,
-            KeyCode::Down => KeyMapping::Down,
-            KeyCode::Up => KeyMapping::Up,
-            _ => KeyMapping::None,
-        };
     }
 
     KeyMapping::None
+}
+
+fn mapkey_keypress(key: &KeyEvent) -> KeyMapping {
+    use KeyCode::*;
+
+    match (key.modifiers, key.code) {
+        (KeyModifiers::NONE, Up) => KeyMapping::Up,
+        (KeyModifiers::NONE, Down) => KeyMapping::Down,
+        (KeyModifiers::NONE, Esc) => KeyMapping::Abort,
+        (KeyModifiers::NONE, Enter) => KeyMapping::Accept,
+        (KeyModifiers::CONTROL, Char('k')) => KeyMapping::Up,
+        (KeyModifiers::CONTROL, Char('j')) => KeyMapping::Down,
+        (KeyModifiers::CONTROL, Char('p')) => KeyMapping::Up,
+        (KeyModifiers::CONTROL, Char('n')) => KeyMapping::Down,
+        (KeyModifiers::CONTROL, Char('c')) => KeyMapping::Abort,
+        (KeyModifiers::CONTROL, Char('u')) => KeyMapping::ScrollUp,
+        (KeyModifiers::CONTROL, Char('d')) => KeyMapping::ScrollDown,
+        (KeyModifiers::CONTROL, Char('s')) => KeyMapping::SelectTarget,
+        (KeyModifiers::CONTROL, Char('e')) => KeyMapping::Editor,
+
+        _ => KeyMapping::None,
+    }
 }

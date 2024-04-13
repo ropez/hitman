@@ -31,7 +31,7 @@ use hitman::{
 use super::{
     centered,
     keymap::{mapkey, KeyMapping},
-    output::OutputView,
+    output::{HttpMessage, OutputView},
     progress::Progress,
     prompt::{Prompt, PromptIntent},
     select::{RequestSelector, Select, SelectIntent, SelectItem},
@@ -66,7 +66,7 @@ pub enum AppState {
     },
 
     RunningRequest {
-        handle: JoinHandle<Result<(String, String)>>,
+        handle: JoinHandle<Result<(HttpMessage, HttpMessage)>>,
         progress: Progress,
     },
 
@@ -569,25 +569,31 @@ async fn make_request(
     buf: &str,
     root_dir: &Path,
     file_path: &Path,
-) -> Result<(String, String)> {
+) -> Result<(HttpMessage, HttpMessage)> {
     let client = build_client()?;
 
-    let mut request = String::new();
+    let mut request = HttpMessage::default();
     for line in buf.lines() {
-        writeln!(request, "> {}", line)?;
+        writeln!(request.header, "> {}", line)?;
     }
-    writeln!(request)?;
+    writeln!(request.header)?;
 
     let (res, _elapsed) = do_request(&client, buf).await?;
 
-    let mut response = String::new();
+    let mut response = HttpMessage::default();
+    writeln!(
+        response.header,
+        "> HTTP/1.1 {} {}",
+        res.status().as_u16(),
+        res.status().canonical_reason().unwrap_or("")
+    )?;
     for (name, value) in res.headers() {
-        writeln!(response, "< {}: {}", name, value.to_str()?)?;
+        writeln!(response.header, "< {}: {}", name, value.to_str()?)?;
     }
-    writeln!(response)?;
+    writeln!(response.header)?;
 
     if let Ok(json) = res.json::<serde_json::Value>().await {
-        writeln!(response, "{}", serde_json::to_string_pretty(&json)?)?;
+        writeln!(response.body, "{}", serde_json::to_string_pretty(&json)?)?;
 
         let options = vec![];
         let env = load_env(root_dir, file_path, &options)?;

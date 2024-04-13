@@ -13,14 +13,20 @@ use super::{
 };
 
 #[derive(Default)]
+pub struct HttpMessage {
+    pub header: String,
+    pub body: String,
+}
+
+#[derive(Default)]
 pub struct OutputView {
-    request: String,
-    response: String,
+    request: HttpMessage,
+    response: HttpMessage,
     scroll: (u16, u16),
 }
 
 impl OutputView {
-    pub fn update(&mut self, request: String, response: String) {
+    pub fn update(&mut self, request: HttpMessage, response: HttpMessage) {
         self.scroll = (0, 0);
         self.request = request;
         self.response = response;
@@ -45,13 +51,17 @@ impl Component for OutputView {
     fn render_ui(&mut self, frame: &mut Frame, area: Rect) {
         let blue = Style::new().blue();
         let req_lines =
-            self.request.lines().map(|line| Line::styled(line, blue));
+            self.request.header.lines().map(|line| Line::styled(line, blue));
 
         let green = Style::new().green();
         let res_lines =
-            self.response.lines().map(|line| Line::styled(line, green));
+            self.response.header.lines().map(|line| Line::styled(line, green));
 
-        let lines: Vec<Line> = req_lines.chain(res_lines).collect();
+        let normal = Style::new();
+        let res_body_lines =
+            self.response.body.lines().map(|line| Line::styled(line, normal));
+
+        let lines: Vec<Line> = req_lines.chain(res_lines).chain(res_body_lines).collect();
 
         let para = Paragraph::new(Text::from(lines))
             .scroll(self.scroll)
