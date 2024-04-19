@@ -24,12 +24,18 @@ pub struct RequestSelector {
 }
 
 impl RequestSelector {
-    pub fn new(reqs: &[String]) -> Self {
-        let items = Vec::from(reqs);
-
+    pub fn new() -> Self {
         Self {
-            selector: Select::new("Requests".into(), "Search".into(), items),
+            selector: Select::new(
+                "Requests".into(),
+                "Search".into(),
+                Vec::new(),
+            ),
         }
+    }
+
+    pub fn populate(&mut self, reqs: Vec<String>) {
+        self.selector.set_items(reqs);
     }
 }
 
@@ -116,6 +122,11 @@ where
             list_state: ListState::default().with_selected(Some(0)),
             search_input: Input::default(),
         }
+    }
+
+    pub fn set_items(&mut self, items: Vec<T>) {
+        self.items = items;
+        self.list_state.select(None);
     }
 
     pub fn selected_item(&self) -> Option<&T> {
@@ -237,11 +248,15 @@ where
         match mapkey(event) {
             KeyMapping::Up => {
                 self.select_prev();
-                return Some(SelectIntent::Change(self.selected_item().cloned()));
+                return Some(SelectIntent::Change(
+                    self.selected_item().cloned(),
+                ));
             }
             KeyMapping::Down => {
                 self.select_next();
-                return Some(SelectIntent::Change(self.selected_item().cloned()));
+                return Some(SelectIntent::Change(
+                    self.selected_item().cloned(),
+                ));
             }
             KeyMapping::Accept => {
                 if let Some(item) = self.selected_item() {
@@ -255,7 +270,9 @@ where
                 if let Some(change) = self.search_input.handle_event(event) {
                     if change.value {
                         self.select_first();
-                        return Some(SelectIntent::Change(self.selected_item().cloned()));
+                        return Some(SelectIntent::Change(
+                            self.selected_item().cloned(),
+                        ));
                     }
                 }
             }
