@@ -39,8 +39,11 @@ use super::{
 };
 
 pub trait Screen {
+    type B: Backend;
+
     fn enter(&self) -> io::Result<()>;
     fn leave(&self) -> io::Result<()>;
+    fn terminal(&mut self) -> &mut Terminal<Self::B>;
 }
 
 pub struct App {
@@ -134,27 +137,23 @@ impl App {
         Ok(app)
     }
 
-    pub async fn run<B, S>(
-        &mut self,
-        mut terminal: Terminal<B>,
-        mut screen: S,
-    ) -> Result<()>
+    pub async fn run<S>(&mut self, mut screen: S) -> Result<()>
     where
-        B: Backend,
         S: Screen,
     {
         screen.enter()?;
 
         while !self.should_quit {
-            terminal.draw(|frame| self.render_ui(frame, frame.size()))?;
+            screen
+                .terminal()
+                .draw(|frame| self.render_ui(frame, frame.size()))?;
 
             let mut pending_intent = self.process_events().await?;
             while let Some(intent) = pending_intent {
-                pending_intent =
-                    match self.dispatch(intent, &mut terminal, &mut screen) {
-                        Ok(it) => it,
-                        Err(err) => Some(Intent::ShowError(err.to_string())),
-                    };
+                pending_intent = match self.dispatch(intent, &mut screen) {
+                    Ok(it) => it,
+                    Err(err) => Some(Intent::ShowError(err.to_string())),
+                };
             }
         }
 
@@ -163,14 +162,12 @@ impl App {
         Ok(())
     }
 
-    fn dispatch<B, S>(
+    fn dispatch<S>(
         &mut self,
         intent: Intent,
-        terminal: &mut Terminal<B>,
         screen: &mut S,
     ) -> Result<Option<Intent>>
     where
-        B: Backend,
         S: Screen,
     {
         use Intent::*;
@@ -266,7 +263,7 @@ impl App {
                 let selected_item =
                     self.request_selector.selector.selected_item();
                 if let Some(selected) = selected_item {
-                    open_in_editor(selected, terminal, screen)?;
+                    open_in_editor(selected, screen)?;
                 }
                 return Ok(Some(PreviewRequest(selected_item.cloned())));
             }
@@ -276,7 +273,7 @@ impl App {
                 });
             }
             AcceptNewRequest(file_path) => {
-                open_in_editor(&file_path, terminal, screen)?;
+                open_in_editor(&file_path, screen)?;
                 return Ok(Some(Update(Some(file_path))));
             }
             ShowError(err) => {
@@ -412,13 +409,11 @@ impl App {
     }
 }
 
-fn open_in_editor<B, S>(
+fn open_in_editor<S>(
     file_path: &String,
-    terminal: &mut Terminal<B>,
     screen: &mut S,
 ) -> Result<(), anyhow::Error>
 where
-    B: Backend,
     S: Screen,
 {
     let editor = std::env::var("EDITOR")
@@ -426,7 +421,7 @@ where
     screen.leave()?;
     let _ = std::process::Command::new(editor).arg(file_path).status();
     screen.enter()?;
-    terminal.clear()?;
+    screen.terminal().clear()?;
     Ok(())
 }
 
