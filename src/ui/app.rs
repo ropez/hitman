@@ -86,6 +86,7 @@ pub enum PendingState {
 
 pub enum Intent {
     Quit,
+    Abort,
     Update(Option<String>),
     PreviewRequest(Option<String>),
     PrepareRequest(String, Vec<(String, String)>),
@@ -99,14 +100,13 @@ pub enum Intent {
         file_path: String,
         prepared_request: String,
     },
+    ShowResult(Result<(HttpMessage, HttpMessage)>),
     SelectTarget,
     AcceptSelectTarget(String),
     EditRequest,
     NewRequest,
     AcceptNewRequest(String),
     ShowError(String),
-
-    ChangeState(AppState),
 }
 
 pub enum AskForValueParams {
@@ -175,27 +175,24 @@ impl App {
     {
         use Intent::*;
 
-        Ok(match intent {
+        match intent {
             Quit => {
                 self.should_quit = true;
-                None
+            }
+            Abort => {
+                self.set_state(AppState::Idle);
             }
             Update(selected) => {
                 self.populate_requests()?;
 
-                Some(PreviewRequest(selected))
-            }
-            ChangeState(state) => {
-                self.error = None;
-                self.state = state;
-                None
+                return Ok(Some(PreviewRequest(selected)));
             }
             PrepareRequest(file_path, options) => {
-                self.try_request(file_path, options)?
+                return Ok(self.try_request(file_path, options)?);
             }
             PreviewRequest(file_path) => {
                 self.preview_request(file_path)?;
-                Some(ChangeState(AppState::Idle))
+                self.set_state(AppState::Idle);
             }
             SendRequest {
                 file_path,
@@ -206,7 +203,7 @@ impl App {
                     writeln!(req.header, "> {}", line)?;
                 }
                 self.output_view.update(req, HttpMessage::default());
-                self.send_request(file_path, prepared_request)?
+                self.send_request(file_path, prepared_request)?;
             }
             AskForValue {
                 key,
@@ -221,13 +218,12 @@ impl App {
                         values.clone(),
                     );
 
-                    let state = AppState::PendingValue {
+                    self.set_state(AppState::PendingValue {
                         key,
                         file_path,
                         pending_options,
                         pending_state: PendingState::Select { component },
-                    };
-                    Some(Intent::ChangeState(state))
+                    });
                 }
 
                 AskForValueParams::Prompt { fallback } => {
@@ -235,26 +231,36 @@ impl App {
                         Prompt::new(format!("Enter value for {{{{{key}}}}}"))
                             .with_fallback(fallback);
 
-                    let state = AppState::PendingValue {
+                    self.set_state(AppState::PendingValue {
                         key,
                         file_path,
                         pending_options,
                         pending_state: PendingState::Prompt { component },
-                    };
-                    Some(Intent::ChangeState(state))
+                    });
                 }
             },
+            ShowResult(result) => {
+                match result {
+                    Ok((request, response)) => {
+                        self.output_view.update(request, response);
+                    }
+                    Err(err) => {
+                        self.output_view.show_error(err.to_string());
+                    }
+                }
+                self.set_state(AppState::Idle);
+            }
             SelectTarget => {
                 let envs = find_environments(&self.root_dir)?;
                 let component =
                     Select::new("Select target".into(), "target".into(), envs);
 
-                Some(ChangeState(AppState::SelectTarget { component }))
+                self.set_state(AppState::SelectTarget { component });
             }
             AcceptSelectTarget(s) => {
                 set_target(&self.root_dir, &s)?;
                 self.target = s;
-                Some(ChangeState(AppState::Idle))
+                self.set_state(AppState::Idle);
             }
             EditRequest => {
                 let selected_item =
@@ -262,21 +268,29 @@ impl App {
                 if let Some(selected) = selected_item {
                     open_in_editor(selected, terminal, screen)?;
                 }
-                Some(PreviewRequest(selected_item.cloned()))
+                return Ok(Some(PreviewRequest(selected_item.cloned())));
             }
-            NewRequest => Some(ChangeState(AppState::NewRequestPrompt {
-                prompt: Prompt::new("Name of request".into()),
-            })),
+            NewRequest => {
+                self.set_state(AppState::NewRequestPrompt {
+                    prompt: Prompt::new("Name of request".into()),
+                });
+            }
             AcceptNewRequest(file_path) => {
                 open_in_editor(&file_path, terminal, screen)?;
-                Some(Update(Some(file_path)))
+                return Ok(Some(Update(Some(file_path))));
             }
             ShowError(err) => {
                 self.error = Some(err);
                 self.state = AppState::Idle;
-                None
             }
-        })
+        };
+
+        Ok(None)
+    }
+
+    fn set_state(&mut self, state: AppState) {
+        self.error = None;
+        self.state = state;
     }
 
     fn populate_requests(&mut self) -> Result<()> {
@@ -307,17 +321,7 @@ impl App {
         if let AppState::RunningRequest { handle, .. } = &mut self.state {
             if handle.is_finished() {
                 return Ok(match handle.await {
-                    Ok(res) => match res {
-                        Ok((request, response)) => {
-                            // FIXME: Intent to update output
-                            self.output_view.update(request, response);
-                            Some(Intent::ChangeState(AppState::Idle))
-                        }
-                        Err(err) => {
-                            self.output_view.show_error(err.to_string());
-                            Some(Intent::ChangeState(AppState::Idle))
-                        }
-                    },
+                    Ok(res) => Some(Intent::ShowResult(res)),
                     Err(err) => Some(Intent::ShowError(err.to_string())),
                 });
             }
@@ -390,7 +394,7 @@ impl App {
         &mut self,
         file_path: String,
         prepared_request: String,
-    ) -> Result<Option<Intent>> {
+    ) -> Result<()> {
         let root_dir = self.root_dir.clone();
         let file_path = PathBuf::from(file_path);
 
@@ -402,8 +406,9 @@ impl App {
             handle,
             progress: Progress,
         };
+        self.set_state(state);
 
-        Ok(Some(Intent::ChangeState(state)))
+        Ok(())
     }
 }
 
@@ -460,9 +465,7 @@ impl Component for App {
                                 {
                                     match intent {
                                         SelectIntent::Abort => {
-                                            return Some(ChangeState(
-                                                AppState::Idle,
-                                            ));
+                                            return Some(Abort);
                                         }
                                         SelectIntent::Accept(selected) => {
                                             let value = match selected {
@@ -496,9 +499,7 @@ impl Component for App {
                                 {
                                     match intent {
                                         PromptIntent::Abort => {
-                                            return Some(ChangeState(
-                                                AppState::Idle,
-                                            ));
+                                            return Some(Abort);
                                         }
                                         PromptIntent::Accept(value) => {
                                             pending_options
@@ -560,7 +561,7 @@ impl Component for App {
                     AppState::RunningRequest { handle, .. } => {
                         if let KeyMapping::Abort = mapkey(&event) {
                             handle.abort();
-                            return Some(ChangeState(AppState::Idle));
+                            return Some(Abort);
                         }
                     }
 
@@ -568,7 +569,7 @@ impl Component for App {
                         if let Some(intent) = prompt.handle_event(&event) {
                             match intent {
                                 PromptIntent::Abort => {
-                                    return Some(ChangeState(AppState::Idle));
+                                    return Some(Abort);
                                 }
                                 PromptIntent::Accept(s) => {
                                     return Some(AcceptNewRequest(s));
@@ -581,7 +582,7 @@ impl Component for App {
                         if let Some(intent) = component.handle_event(&event) {
                             match intent {
                                 SelectIntent::Abort => {
-                                    return Some(ChangeState(AppState::Idle));
+                                    return Some(Abort);
                                 }
                                 SelectIntent::Accept(s) => {
                                     return Some(AcceptSelectTarget(s));
