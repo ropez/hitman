@@ -86,7 +86,7 @@ pub enum PendingState {
 
 pub enum Intent {
     Quit,
-    Update,
+    Update(Option<String>),
     PreviewRequest(Option<String>),
     PrepareRequest(String, Vec<(String, String)>),
     AskForValue {
@@ -180,10 +180,10 @@ impl App {
                 self.should_quit = true;
                 None
             }
-            Update => {
+            Update(selected) => {
                 self.populate_requests()?;
 
-                Some(ChangeState(AppState::Idle))
+                Some(PreviewRequest(selected))
             }
             ChangeState(state) => {
                 self.error = None;
@@ -195,7 +195,7 @@ impl App {
             }
             PreviewRequest(file_path) => {
                 self.preview_request(file_path)?;
-                None
+                Some(ChangeState(AppState::Idle))
             }
             SendRequest {
                 file_path,
@@ -269,7 +269,7 @@ impl App {
             })),
             AcceptNewRequest(file_path) => {
                 open_in_editor(&file_path, terminal, screen)?;
-                Some(Update)
+                Some(Update(Some(file_path)))
             }
             ShowError(err) => {
                 self.error = Some(err);
@@ -287,6 +287,7 @@ impl App {
             .map(String::from)
             .collect();
         self.request_selector.populate(reqs);
+
         Ok(())
     }
 
@@ -375,6 +376,8 @@ impl App {
             for line in f.lines() {
                 writeln!(req.header, "{}", line)?;
             }
+
+            self.request_selector.try_select(&file_path);
             self.output_view.update(req, HttpMessage::default());
         } else {
             self.output_view.reset();
@@ -536,6 +539,15 @@ impl Component for App {
                             KeyMapping::Editor => {
                                 return Some(Intent::EditRequest)
                             }
+                            KeyMapping::Reload => {
+                                let selected_item = self
+                                    .request_selector
+                                    .selector
+                                    .selected_item();
+                                return Some(Intent::Update(
+                                    selected_item.cloned(),
+                                ));
+                            }
                             KeyMapping::New => return Some(Intent::NewRequest),
                             KeyMapping::Abort => return Some(Intent::Quit),
                             KeyMapping::SelectTarget => {
@@ -640,7 +652,7 @@ impl App {
             AppState::PendingValue { pending_state, .. } => match pending_state
             {
                 PendingState::Prompt { component, .. } => {
-                    let inner_area = centered(area, 30, 30);
+                    let inner_area = centered(area, 48, 30);
                     component.render_ui(frame, inner_area);
                 }
                 PendingState::Select { component, .. } => {
@@ -650,7 +662,7 @@ impl App {
             },
 
             AppState::NewRequestPrompt { prompt } => {
-                let inner_area = centered(area, 30, 30);
+                let inner_area = centered(area, 48, 30);
                 prompt.render_ui(frame, inner_area);
             }
 

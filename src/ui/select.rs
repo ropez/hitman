@@ -37,6 +37,10 @@ impl RequestSelector {
     pub fn populate(&mut self, reqs: Vec<String>) {
         self.selector.set_items(reqs);
     }
+
+    pub fn try_select(&mut self, selected: &String) {
+        self.selector.try_select(selected);
+    }
 }
 
 impl Component for RequestSelector {
@@ -195,6 +199,14 @@ where
                 }
             })
             .collect()
+    }
+
+    pub fn try_select(&mut self, item: &T)
+    where T: PartialEq
+    {
+        if let Some(pos) = self.items.iter().position(|i| item.eq(i)) {
+            self.list_state.select(Some(pos));
+        }
     }
 }
 
