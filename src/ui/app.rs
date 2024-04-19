@@ -65,6 +65,10 @@ pub enum AppState {
         pending_state: PendingState,
     },
 
+    NewRequestPrompt {
+        prompt: Prompt,
+    },
+
     RunningRequest {
         handle: JoinHandle<Result<(HttpMessage, HttpMessage)>>,
         progress: Progress,
@@ -82,23 +86,27 @@ pub enum PendingState {
 
 pub enum Intent {
     Quit,
-    PrepareRequest(String, Vec<(String, String)>),
+    Update,
     PreviewRequest(Option<String>),
-    SendRequest {
-        file_path: String,
-        prepared_request: String,
-    },
+    PrepareRequest(String, Vec<(String, String)>),
     AskForValue {
         key: String,
         file_path: String,
         pending_options: Vec<(String, String)>,
         params: AskForValueParams,
     },
-    ChangeState(AppState),
+    SendRequest {
+        file_path: String,
+        prepared_request: String,
+    },
     SelectTarget,
     AcceptSelectTarget(String),
     EditRequest,
+    NewRequest,
+    AcceptNewRequest(String),
     ShowError(String),
+
+    ChangeState(AppState),
 }
 
 pub enum AskForValueParams {
@@ -112,26 +120,18 @@ impl App {
 
         let target = get_target(&root_dir);
 
-        // FIXME: Need to live update requests
-
-        let reqs = find_available_requests(&root_dir)?;
-        let reqs: Vec<String> = reqs
-            .iter()
-            .filter_map(|p| p.to_str())
-            .map(String::from)
-            .collect();
-
-        let request_selector = RequestSelector::new(&reqs);
-
-        Ok(Self {
+        let mut app = Self {
             root_dir,
             target,
-            request_selector,
+            request_selector: RequestSelector::new(),
             output_view: OutputView::default(),
             state: AppState::Idle,
             error: None,
             should_quit: false,
-        })
+        };
+
+        app.populate_requests()?;
+        Ok(app)
     }
 
     pub async fn run<B, S>(
@@ -179,6 +179,11 @@ impl App {
             Quit => {
                 self.should_quit = true;
                 None
+            }
+            Update => {
+                self.populate_requests()?;
+
+                Some(ChangeState(AppState::Idle))
             }
             ChangeState(state) => {
                 self.error = None;
@@ -252,20 +257,19 @@ impl App {
                 Some(ChangeState(AppState::Idle))
             }
             EditRequest => {
-                let selected_item = self.request_selector.selector.selected_item();
+                let selected_item =
+                    self.request_selector.selector.selected_item();
                 if let Some(selected) = selected_item {
-                    let editor = std::env::var("EDITOR")
-                        .context("EDITOR environment variable not set")?;
-
-                    screen.leave()?;
-                    let _ = std::process::Command::new(editor)
-                        .arg(selected)
-                        .status();
-
-                    screen.enter()?;
-                    terminal.clear()?;
+                    open_in_editor(selected, terminal, screen)?;
                 }
                 Some(PreviewRequest(selected_item.cloned()))
+            }
+            NewRequest => Some(ChangeState(AppState::NewRequestPrompt {
+                prompt: Prompt::new("Name of request".into()),
+            })),
+            AcceptNewRequest(file_path) => {
+                open_in_editor(&file_path, terminal, screen)?;
+                Some(Update)
             }
             ShowError(err) => {
                 self.error = Some(err);
@@ -273,6 +277,17 @@ impl App {
                 None
             }
         })
+    }
+
+    fn populate_requests(&mut self) -> Result<()> {
+        let reqs = find_available_requests(&self.root_dir)?;
+        let reqs: Vec<String> = reqs
+            .iter()
+            .filter_map(|p| p.to_str())
+            .map(String::from)
+            .collect();
+        self.request_selector.populate(reqs);
+        Ok(())
     }
 
     async fn process_events(&mut self) -> Result<Option<Intent>> {
@@ -389,6 +404,24 @@ impl App {
     }
 }
 
+fn open_in_editor<B, S>(
+    file_path: &String,
+    terminal: &mut Terminal<B>,
+    screen: &mut S,
+) -> Result<(), anyhow::Error>
+where
+    B: Backend,
+    S: Screen,
+{
+    let editor = std::env::var("EDITOR")
+        .context("EDITOR environment variable not set")?;
+    screen.leave()?;
+    let _ = std::process::Command::new(editor).arg(file_path).status();
+    screen.enter()?;
+    terminal.clear()?;
+    Ok(())
+}
+
 impl Component for App {
     type Intent = Intent;
 
@@ -503,6 +536,7 @@ impl Component for App {
                             KeyMapping::Editor => {
                                 return Some(Intent::EditRequest)
                             }
+                            KeyMapping::New => return Some(Intent::NewRequest),
                             KeyMapping::Abort => return Some(Intent::Quit),
                             KeyMapping::SelectTarget => {
                                 return Some(Intent::SelectTarget);
@@ -515,6 +549,19 @@ impl Component for App {
                         if let KeyMapping::Abort = mapkey(&event) {
                             handle.abort();
                             return Some(ChangeState(AppState::Idle));
+                        }
+                    }
+
+                    AppState::NewRequestPrompt { prompt } => {
+                        if let Some(intent) = prompt.handle_event(&event) {
+                            match intent {
+                                PromptIntent::Abort => {
+                                    return Some(ChangeState(AppState::Idle));
+                                }
+                                PromptIntent::Accept(s) => {
+                                    return Some(AcceptNewRequest(s));
+                                }
+                            }
                         }
                     }
 
@@ -579,7 +626,7 @@ impl App {
         let status_line = match &self.error {
             Some(msg) => Paragraph::new(msg.clone()).red().reversed(),
             None => Paragraph::new(
-                "Ctrl+S: Select target, Ctrl+E: Edit selected request",
+                "Ctrl+S: Select target, Ctrl+E: Edit selected request, Ctrl+R: New request",
             )
             .dark_gray(),
         };
@@ -601,6 +648,11 @@ impl App {
                     component.render_ui(frame, inner_area);
                 }
             },
+
+            AppState::NewRequestPrompt { prompt } => {
+                let inner_area = centered(area, 30, 30);
+                prompt.render_ui(frame, inner_area);
+            }
 
             AppState::SelectTarget { component } => {
                 let inner_area = centered(area, 30, 20);

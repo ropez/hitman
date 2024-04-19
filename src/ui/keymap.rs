@@ -11,6 +11,7 @@ pub enum KeyMapping {
     ScrollDown,
     SelectTarget,
     Editor,
+    New,
 }
 
 pub fn mapkey(event: &Event) -> KeyMapping {
@@ -40,6 +41,7 @@ fn mapkey_keypress(key: &KeyEvent) -> KeyMapping {
         (KeyModifiers::CONTROL, Char('d')) => KeyMapping::ScrollDown,
         (KeyModifiers::CONTROL, Char('s')) => KeyMapping::SelectTarget,
         (KeyModifiers::CONTROL, Char('e')) => KeyMapping::Editor,
+        (KeyModifiers::CONTROL, Char('r')) => KeyMapping::New,
 
         _ => KeyMapping::None,
     }
