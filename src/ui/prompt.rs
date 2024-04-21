@@ -8,21 +8,16 @@ use tui_input::{backend::crossterm::EventHandler, Input};
 
 use super::{
     keymap::{mapkey, KeyMapping},
-    Component,
+    Component, PromptComponent, PromptIntent,
 };
 
-pub struct Prompt {
+pub struct SimplePrompt {
     title: String,
     fallback: Option<String>,
     input: Input,
 }
 
-pub enum PromptIntent {
-    Abort,
-    Accept(String),
-}
-
-impl Prompt {
+impl SimplePrompt {
     pub fn new(title: String) -> Self {
         Self {
             title,
@@ -48,9 +43,7 @@ impl Prompt {
     }
 }
 
-impl Component for Prompt {
-    type Intent = PromptIntent;
-
+impl Component for SimplePrompt {
     fn render_ui(&mut self, frame: &mut Frame, area: Rect) {
         let chunks = Layout::new(
             Direction::Vertical,
@@ -87,8 +80,10 @@ impl Component for Prompt {
 
         frame.set_cursor(inner.x + cur + self.input.visual_cursor() as u16, inner.y);
     }
+}
 
-    fn handle_event(&mut self, event: &Event) -> Option<PromptIntent> {
+impl PromptComponent for SimplePrompt {
+    fn handle_prompt(&mut self, event: &Event) -> Option<PromptIntent> {
         match mapkey(event) {
             KeyMapping::Accept => {
                 return Some(PromptIntent::Accept(self.value()));

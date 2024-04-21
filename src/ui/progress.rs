@@ -11,11 +11,7 @@ use super::{centered, Component};
 
 pub struct Progress;
 
-pub struct Abort;
-
 impl Component for Progress {
-    type Intent = Abort;
-
     fn render_ui(&mut self, frame: &mut Frame, area: Rect) {
         let t = SystemTime::now()
             .duration_since(UNIX_EPOCH)

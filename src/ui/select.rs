@@ -15,7 +15,7 @@ use tui_input::{backend::crossterm::EventHandler, Input};
 
 use super::{
     keymap::{mapkey, KeyMapping},
-    Component,
+    Component, InteractiveComponent, PromptComponent, PromptIntent,
 };
 
 #[derive(Default)]
@@ -44,11 +44,13 @@ impl RequestSelector {
 }
 
 impl Component for RequestSelector {
-    type Intent = SelectIntent<String>;
-
     fn render_ui(&mut self, frame: &mut Frame, area: Rect) {
         self.selector.render_ui(frame, area);
     }
+}
+
+impl InteractiveComponent for RequestSelector {
+    type Intent = SelectIntent<String>;
 
     fn handle_event(&mut self, event: &Event) -> Option<Self::Intent> {
         self.selector.handle_event(event)
@@ -84,6 +86,10 @@ pub trait SelectItem {
     fn render_highlighted<'a>(&self, highlight: &[usize]) -> ListItem<'a> {
         format_item(self.text(), highlight)
     }
+}
+
+pub trait PromptSelectItem: SelectItem {
+    fn to_value(&self) -> String;
 }
 
 impl SelectItem for String {
@@ -202,9 +208,14 @@ where
     }
 
     pub fn try_select(&mut self, item: &T)
-    where T: PartialEq
+    where
+        T: PartialEq,
     {
-        if let Some(pos) = self.items.iter().position(|i| item.eq(i)) {
+        if let Some(pos) = self
+            .get_filtered_items()
+            .iter()
+            .position(|(i, _)| item.eq(i))
+        {
             self.list_state.select(Some(pos));
         }
     }
@@ -214,8 +225,6 @@ impl<T> Component for Select<T>
 where
     T: SelectItem + Clone,
 {
-    type Intent = SelectIntent<T>;
-
     fn render_ui(&mut self, frame: &mut Frame, area: Rect) {
         frame.render_widget(Clear, area);
 
@@ -255,6 +264,13 @@ where
 
         frame.set_cursor(inner.x + cur as u16, inner.y);
     }
+}
+
+impl<T> InteractiveComponent for Select<T>
+where
+    T: SelectItem + Clone,
+{
+    type Intent = SelectIntent<T>;
 
     fn handle_event(&mut self, event: &Event) -> Option<Self::Intent> {
         match mapkey(event) {
@@ -292,5 +308,23 @@ where
         }
 
         None
+    }
+}
+
+impl<T> PromptComponent for Select<T>
+where
+    T: PromptSelectItem + Clone,
+{
+    fn handle_prompt(&mut self, event: &Event) -> Option<PromptIntent> {
+        match self.handle_event(event) {
+            Some(intent) => match intent {
+                SelectIntent::Abort => Some(PromptIntent::Abort),
+                SelectIntent::Accept(item) => {
+                    Some(PromptIntent::Accept(item.to_value()))
+                }
+                SelectIntent::Change(_) => None,
+            },
+            None => None,
+        }
     }
 }

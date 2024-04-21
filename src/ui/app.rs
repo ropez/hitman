@@ -28,14 +28,18 @@ use hitman::{
     substitute::{substitute, SubstituteError},
 };
 
+use crate::ui::PromptIntent;
+
 use super::{
     centered,
     keymap::{mapkey, KeyMapping},
     output::{HttpMessage, OutputView},
     progress::Progress,
-    prompt::{Prompt, PromptIntent},
-    select::{RequestSelector, Select, SelectIntent, SelectItem},
-    Component,
+    prompt::SimplePrompt,
+    select::{
+        RequestSelector, Select, SelectIntent, SelectItem, PromptSelectItem,
+    },
+    Component, InteractiveComponent, PromptComponent,
 };
 
 pub trait Screen {
@@ -64,12 +68,11 @@ pub enum AppState {
         file_path: String,
         key: String,
         pending_options: Vec<(String, String)>,
-
-        pending_state: PendingState,
+        component: Box<dyn PromptComponent>,
     },
 
     NewRequestPrompt {
-        prompt: Prompt,
+        prompt: SimplePrompt,
     },
 
     RunningRequest {
@@ -80,11 +83,6 @@ pub enum AppState {
     SelectTarget {
         component: Select<String>,
     },
-}
-
-pub enum PendingState {
-    Prompt { component: Prompt },
-    Select { component: Select<Value> },
 }
 
 pub enum Intent {
@@ -219,20 +217,20 @@ impl App {
                         key,
                         file_path,
                         pending_options,
-                        pending_state: PendingState::Select { component },
+                        component: Box::new(component),
                     });
                 }
 
                 AskForValueParams::Prompt { fallback } => {
                     let component =
-                        Prompt::new(format!("Enter value for {{{{{key}}}}}"))
+                        SimplePrompt::new(format!("Enter value for {{{{{key}}}}}"))
                             .with_fallback(fallback);
 
                     self.set_state(AppState::PendingValue {
                         key,
                         file_path,
                         pending_options,
-                        pending_state: PendingState::Prompt { component },
+                        component: Box::new(component),
                     });
                 }
             },
@@ -269,7 +267,7 @@ impl App {
             }
             NewRequest => {
                 self.set_state(AppState::NewRequestPrompt {
-                    prompt: Prompt::new("Name of request".into()),
+                    prompt: SimplePrompt::new("Name of request".into()),
                 });
             }
             AcceptNewRequest(file_path) => {
@@ -426,8 +424,6 @@ where
 }
 
 impl Component for App {
-    type Intent = Intent;
-
     fn render_ui(&mut self, frame: &mut Frame, area: Rect) {
         let layout = Layout::new(
             Direction::Vertical,
@@ -439,6 +435,10 @@ impl Component for App {
         self.render_status(frame, layout[1]);
         self.render_popup(frame);
     }
+}
+
+impl InteractiveComponent for App {
+    type Intent = Intent;
 
     fn handle_event(&mut self, event: &Event) -> Option<Self::Intent> {
         use Intent::*;
@@ -450,67 +450,27 @@ impl Component for App {
                         key,
                         file_path,
                         pending_options,
-                        pending_state,
+                        component,
                         ..
                     } => {
-                        match pending_state {
-                            PendingState::Select { component } => {
-                                if let Some(intent) =
-                                    component.handle_event(&event)
-                                {
-                                    match intent {
-                                        SelectIntent::Abort => {
-                                            return Some(Abort);
-                                        }
-                                        SelectIntent::Accept(selected) => {
-                                            let value = match selected {
-                                                Value::Table(t) => match t.get("value") {
-                                                    Some(Value::String(value)) => value.clone(),
-                                                    Some(value) => value.to_string(),
-                                                    _ => return Some(ShowError(
-                                                    format!("Replacement not found: {key}"),
-)),
-                                                },
-                                                other => other.to_string(),
-                                            };
-
-                                            // XXX Maybe we can simplify this by emitting
-                                            // the pending_state
-                                            pending_options
-                                                .push((key.clone(), value));
-                                            return Some(PrepareRequest(
-                                                file_path.clone(),
-                                                pending_options.clone(),
-                                            ));
-                                        }
-                                        SelectIntent::Change(_) => (),
-                                    }
+                        if let Some(intent) =
+                            component.handle_prompt(&event)
+                        {
+                            match intent {
+                                PromptIntent::Abort => {
+                                    return Some(Abort);
                                 }
-                                return None;
-                            }
-                            PendingState::Prompt { component } => {
-                                if let Some(intent) =
-                                    component.handle_event(&event)
-                                {
-                                    match intent {
-                                        PromptIntent::Abort => {
-                                            return Some(Abort);
-                                        }
-                                        PromptIntent::Accept(value) => {
-                                            pending_options
-                                                .push((key.clone(), value));
-                                            return Some(PrepareRequest(
-                                                file_path.clone(),
-                                                pending_options.clone(),
-                                            ));
-                                        }
-                                    }
+                                PromptIntent::Accept(value) => {
+                                    pending_options.push((key.clone(), value));
+                                    return Some(PrepareRequest(
+                                        file_path.clone(),
+                                        pending_options.clone(),
+                                    ));
                                 }
-                                return None;
                             }
                         }
+                        return None;
                     }
-
                     AppState::Idle => {
                         if let Some(intent) =
                             self.request_selector.handle_event(&event)
@@ -561,7 +521,8 @@ impl Component for App {
                     }
 
                     AppState::NewRequestPrompt { prompt } => {
-                        if let Some(intent) = prompt.handle_event(&event) {
+                        if let Some(intent) = prompt.handle_prompt(&event)
+                        {
                             match intent {
                                 PromptIntent::Abort => {
                                     return Some(Abort);
@@ -645,17 +606,10 @@ impl App {
     fn render_popup(&mut self, frame: &mut Frame) {
         let area = frame.size();
         match &mut self.state {
-            AppState::PendingValue { pending_state, .. } => match pending_state
-            {
-                PendingState::Prompt { component, .. } => {
-                    let inner_area = centered(area, 48, 30);
-                    component.render_ui(frame, inner_area);
-                }
-                PendingState::Select { component, .. } => {
-                    let inner_area = centered(area, 60, 20);
-                    component.render_ui(frame, inner_area);
-                }
-            },
+            AppState::PendingValue { component, .. } => {
+                let inner_area = centered(area, 48, 30);
+                component.render_ui(frame, inner_area);
+            }
 
             AppState::NewRequestPrompt { prompt } => {
                 let inner_area = centered(area, 48, 30);
@@ -722,6 +676,19 @@ impl SelectItem for Value {
                 Some(Value::String(value)) => value.clone(),
                 Some(value) => value.to_string(),
                 None => t.to_string(),
+            },
+            other => other.to_string(),
+        }
+    }
+}
+
+impl PromptSelectItem for Value {
+    fn to_value(&self) -> String {
+        match self {
+            Value::Table(t) => match t.get("value") {
+                Some(Value::String(value)) => value.clone(),
+                Some(value) => value.to_string(),
+                _ => t.to_string(),
             },
             other => other.to_string(),
         }

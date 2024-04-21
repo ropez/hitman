@@ -5,20 +5,29 @@ use ratatui::{
 };
 
 pub mod app;
+pub mod keymap;
 pub mod output;
 pub mod progress;
 pub mod prompt;
 pub mod select;
-pub mod keymap;
 
 pub trait Component {
+    fn render_ui(&mut self, frame: &mut Frame, area: Rect);
+}
+
+pub trait InteractiveComponent : Component {
     type Intent;
 
-    fn render_ui(&mut self, frame: &mut Frame, area: Rect);
+    fn handle_event(&mut self, event: &Event) -> Option<Self::Intent>;
+}
 
-    fn handle_event(&mut self, _event: &Event) -> Option<Self::Intent> {
-        None
-    }
+pub enum PromptIntent {
+    Abort,
+    Accept(String),
+}
+
+pub trait PromptComponent : Component {
+    fn handle_prompt(&mut self, event: &Event) -> Option<PromptIntent>;
 }
 
 pub(crate) fn centered(area: Rect, w: u16, h: u16) -> Rect {

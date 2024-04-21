@@ -9,7 +9,7 @@ use ratatui::{
 
 use super::{
     keymap::{mapkey, KeyMapping},
-    Component,
+    Component, InteractiveComponent,
 };
 
 #[derive(Default)]
@@ -57,8 +57,6 @@ impl OutputView {
 }
 
 impl Component for OutputView {
-    type Intent = ();
-
     fn render_ui(&mut self, frame: &mut Frame, area: Rect) {
         let blue = Style::new().blue();
         let req_lines =
@@ -81,6 +79,10 @@ impl Component for OutputView {
 
         frame.render_widget(para, area);
     }
+}
+
+impl InteractiveComponent for OutputView {
+    type Intent = ();
 
     fn handle_event(&mut self, event: &Event) -> Option<()> {
         match mapkey(event) {
