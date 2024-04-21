@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use crossterm::event::Event;
 use ratatui::{
     layout::Rect,
@@ -12,35 +14,59 @@ use super::{
     Component, InteractiveComponent,
 };
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct HttpMessage {
     pub header: String,
     pub body: String,
 }
 
+pub struct HttpRequestInfo {
+    request: HttpMessage,
+    status: RequestStatus,
+}
+
+impl HttpRequestInfo {
+    pub fn new(request: HttpMessage, status: RequestStatus) -> Self {
+        Self { request, status }
+    }
+}
+
+pub enum RequestStatus {
+    Pending,
+    Running,
+    Complete {
+        response: HttpMessage,
+        elapsed: Duration,
+    },
+    Feiled {
+        error: String,
+    },
+}
+
 #[derive(Default)]
 pub struct OutputView {
-    request: HttpMessage,
-    response: HttpMessage,
+    request_info: Option<HttpRequestInfo>,
     scroll: (u16, u16),
 }
 
 impl OutputView {
-    pub fn update(&mut self, request: HttpMessage, response: HttpMessage) {
+    pub fn update(&mut self, info: HttpRequestInfo) {
         self.scroll = (0, 0);
-        self.request = request;
-        self.response = response;
+        self.request_info = Some(info);
     }
 
     pub fn show_error(&mut self, error: String) {
-        self.response.header = "\n".to_string();
-        self.response.body = error;
+        if let Some(info) = &self.request_info {
+            self.request_info = Some(HttpRequestInfo {
+                request: info.request.clone(),
+                status: RequestStatus::Feiled { error },
+            });
+        }
     }
 
     pub fn reset(&mut self) {
         self.scroll = (0, 0);
-        self.request = HttpMessage::default();
-        self.response = HttpMessage::default();
+        self.request_info = None;
     }
 
     pub fn scroll_up(&mut self) {
@@ -58,19 +84,43 @@ impl OutputView {
 
 impl Component for OutputView {
     fn render_ui(&mut self, frame: &mut Frame, area: Rect) {
-        let blue = Style::new().blue();
-        let req_lines =
-            self.request.header.lines().map(|line| Line::styled(line, blue));
+        let mut lines: Vec<Line> = Vec::new();
 
-        let green = Style::new().green();
-        let res_lines =
-            self.response.header.lines().map(|line| Line::styled(line, green));
+        if let Some(info) = &self.request_info {
+            let blue = Style::new().blue();
+            let req_lines = info
+                .request
+                .header
+                .lines()
+                .map(|line| Line::styled(line, blue));
+            lines.extend(req_lines);
 
-        let normal = Style::new();
-        let res_body_lines =
-            self.response.body.lines().map(|line| Line::styled(line, normal));
+            match &info.status {
+                RequestStatus::Pending => (),
+                RequestStatus::Running => (),
+                RequestStatus::Complete { response, elapsed } => {
+                    let green = Style::new().green();
+                    let res_lines = response
+                        .header
+                        .lines()
+                        .map(|line| Line::styled(line, green));
+                    lines.extend(res_lines);
 
-        let lines: Vec<Line> = req_lines.chain(res_lines).chain(res_body_lines).collect();
+                    let normal = Style::new();
+                    let res_body_lines = response
+                        .body
+                        .lines()
+                        .map(|line| Line::styled(line, normal));
+                    lines.extend(res_body_lines);
+                }
+                RequestStatus::Feiled { error } => {
+                    let yellow = Style::new().yellow();
+                    let res_body_lines =
+                        error.lines().map(|line| Line::styled(line, yellow));
+                    lines.extend(res_body_lines);
+                }
+            }
+        }
 
         let para = Paragraph::new(Text::from(lines))
             .wrap(Wrap::default())

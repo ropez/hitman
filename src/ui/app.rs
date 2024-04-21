@@ -3,7 +3,7 @@ use std::{
     fs::read_to_string,
     io,
     path::{Path, PathBuf},
-    time::Duration,
+    time::Duration, process::Command,
 };
 
 use anyhow::{Context, Result};
@@ -28,7 +28,7 @@ use hitman::{
     substitute::{substitute, SubstituteError},
 };
 
-use crate::ui::PromptIntent;
+use crate::ui::{PromptIntent, output::{HttpRequestInfo, RequestStatus}};
 
 use super::{
     centered,
@@ -37,7 +37,7 @@ use super::{
     progress::Progress,
     prompt::SimplePrompt,
     select::{
-        RequestSelector, Select, SelectIntent, SelectItem, PromptSelectItem,
+        PromptSelectItem, RequestSelector, Select, SelectIntent, SelectItem,
     },
     Component, InteractiveComponent, PromptComponent,
 };
@@ -76,7 +76,7 @@ pub enum AppState {
     },
 
     RunningRequest {
-        handle: JoinHandle<Result<(HttpMessage, HttpMessage)>>,
+        handle: JoinHandle<Result<HttpRequestInfo>>, // FIXME Drop <Result>
         progress: Progress,
     },
 
@@ -101,7 +101,7 @@ pub enum Intent {
         file_path: String,
         prepared_request: String,
     },
-    ShowResult(Result<(HttpMessage, HttpMessage)>),
+    ShowResult(Result<HttpRequestInfo>),
     SelectTarget,
     AcceptSelectTarget(String),
     EditRequest,
@@ -197,7 +197,8 @@ impl App {
                 for line in prepared_request.lines() {
                     writeln!(req.header, "> {}", line)?;
                 }
-                self.output_view.update(req, HttpMessage::default());
+                let info = HttpRequestInfo::new(req, RequestStatus::Running);
+                self.output_view.update(info);
                 self.send_request(file_path, prepared_request)?;
             }
             AskForValue {
@@ -205,41 +206,40 @@ impl App {
                 file_path,
                 pending_options,
                 params,
-            } => match params {
-                AskForValueParams::Select { values } => {
-                    let component = Select::new(
-                        format!("Select substitution value for {{{{{key}}}}}",),
-                        key.clone(),
-                        values.clone(),
-                    );
+            } => {
+                let component: Box<dyn PromptComponent> = match params {
+                    AskForValueParams::Select { values } => {
+                        Box::new(Select::new(
+                            format!(
+                                "Select substitution value for {{{{{key}}}}}",
+                            ),
+                            key.clone(),
+                            values.clone(),
+                        ))
+                    }
 
-                    self.set_state(AppState::PendingValue {
-                        key,
-                        file_path,
-                        pending_options,
-                        component: Box::new(component),
-                    });
-                }
+                    AskForValueParams::Prompt { fallback } => Box::new(
+                        SimplePrompt::new(format!(
+                            "Enter value for {{{{{key}}}}}"
+                        ))
+                        .with_fallback(fallback),
+                    ),
+                };
 
-                AskForValueParams::Prompt { fallback } => {
-                    let component =
-                        SimplePrompt::new(format!("Enter value for {{{{{key}}}}}"))
-                            .with_fallback(fallback);
-
-                    self.set_state(AppState::PendingValue {
-                        key,
-                        file_path,
-                        pending_options,
-                        component: Box::new(component),
-                    });
-                }
-            },
+                self.set_state(AppState::PendingValue {
+                    key,
+                    file_path,
+                    pending_options,
+                    component,
+                });
+            }
             ShowResult(result) => {
                 match result {
-                    Ok((request, response)) => {
-                        self.output_view.update(request, response);
+                    Ok(info) => {
+                        self.output_view.update(info);
                     }
                     Err(err) => {
+                        // FIXME: Pass RequestInfo all the way
                         self.output_view.show_error(err.to_string());
                     }
                 }
@@ -377,7 +377,9 @@ impl App {
             }
 
             self.request_selector.try_select(&file_path);
-            self.output_view.update(req, HttpMessage::default());
+
+            let info = HttpRequestInfo::new(req, RequestStatus::Pending);
+            self.output_view.update(info);
         } else {
             self.output_view.reset();
         }
@@ -417,7 +419,7 @@ where
     let editor = std::env::var("EDITOR")
         .context("EDITOR environment variable not set")?;
     screen.leave()?;
-    let _ = std::process::Command::new(editor).arg(file_path).status();
+    let _ = Command::new(editor).arg(file_path).status();
     screen.enter()?;
     screen.terminal().clear()?;
     Ok(())
@@ -453,9 +455,7 @@ impl InteractiveComponent for App {
                         component,
                         ..
                     } => {
-                        if let Some(intent) =
-                            component.handle_prompt(&event)
-                        {
+                        if let Some(intent) = component.handle_prompt(&event) {
                             match intent {
                                 PromptIntent::Abort => {
                                     return Some(Abort);
@@ -521,8 +521,7 @@ impl InteractiveComponent for App {
                     }
 
                     AppState::NewRequestPrompt { prompt } => {
-                        if let Some(intent) = prompt.handle_prompt(&event)
-                        {
+                        if let Some(intent) = prompt.handle_prompt(&event) {
                             match intent {
                                 PromptIntent::Abort => {
                                     return Some(Abort);
@@ -634,7 +633,7 @@ async fn make_request(
     buf: &str,
     root_dir: &Path,
     file_path: &Path,
-) -> Result<(HttpMessage, HttpMessage)> {
+) -> Result<HttpRequestInfo> {
     let client = build_client()?;
 
     let mut request = HttpMessage::default();
@@ -643,7 +642,7 @@ async fn make_request(
     }
     writeln!(request.header)?;
 
-    let (res, _elapsed) = do_request(&client, buf).await?;
+    let (res, elapsed) = do_request(&client, buf).await?;
 
     let mut response = HttpMessage::default();
     writeln!(
@@ -666,7 +665,7 @@ async fn make_request(
         update_data(&vars)?;
     }
 
-    Ok((request, response))
+    Ok(HttpRequestInfo::new(request, RequestStatus::Complete { response, elapsed }))
 }
 
 impl SelectItem for Value {
