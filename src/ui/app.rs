@@ -3,7 +3,8 @@ use std::{
     fs::read_to_string,
     io,
     path::{Path, PathBuf},
-    time::Duration, process::Command,
+    process::Command,
+    time::Duration,
 };
 
 use anyhow::{Context, Result};
@@ -28,12 +29,15 @@ use hitman::{
     substitute::{substitute, SubstituteError},
 };
 
-use crate::ui::{PromptIntent, output::{HttpRequestInfo, RequestStatus}};
+use crate::ui::{
+    output::{HttpRequestInfo, RequestStatus},
+    PromptIntent,
+};
 
 use super::{
     centered,
     keymap::{mapkey, KeyMapping},
-    output::{HttpMessage, OutputView},
+    output::{HttpMessage, OutputView, HttpRequestMessage},
     progress::Progress,
     prompt::SimplePrompt,
     select::{
@@ -76,7 +80,7 @@ pub enum AppState {
     },
 
     RunningRequest {
-        handle: JoinHandle<Result<HttpRequestInfo>>, // FIXME Drop <Result>
+        handle: JoinHandle<HttpRequestInfo>,
         progress: Progress,
     },
 
@@ -101,7 +105,7 @@ pub enum Intent {
         file_path: String,
         prepared_request: String,
     },
-    ShowResult(Result<HttpRequestInfo>),
+    ShowResult(HttpRequestInfo),
     SelectTarget,
     AcceptSelectTarget(String),
     EditRequest,
@@ -193,10 +197,7 @@ impl App {
                 file_path,
                 prepared_request,
             } => {
-                let mut req = HttpMessage::default();
-                for line in prepared_request.lines() {
-                    writeln!(req.header, "> {}", line)?;
-                }
+                let req = HttpRequestMessage(prepared_request.clone());
                 let info = HttpRequestInfo::new(req, RequestStatus::Running);
                 self.output_view.update(info);
                 self.send_request(file_path, prepared_request)?;
@@ -233,16 +234,8 @@ impl App {
                     component,
                 });
             }
-            ShowResult(result) => {
-                match result {
-                    Ok(info) => {
-                        self.output_view.update(info);
-                    }
-                    Err(err) => {
-                        // FIXME: Pass RequestInfo all the way
-                        self.output_view.show_error(err.to_string());
-                    }
-                }
+            ShowResult(info) => {
+                self.output_view.update(info);
                 self.set_state(AppState::Idle);
             }
             SelectTarget => {
@@ -371,10 +364,7 @@ impl App {
             // TODO: Highlight substitutions and current values
 
             let f = read_to_string(path.clone())?;
-            let mut req = HttpMessage::default();
-            for line in f.lines() {
-                writeln!(req.header, "{}", line)?;
-            }
+            let req = HttpRequestMessage(f);
 
             self.request_selector.try_select(&file_path);
 
@@ -633,14 +623,27 @@ async fn make_request(
     buf: &str,
     root_dir: &Path,
     file_path: &Path,
-) -> Result<HttpRequestInfo> {
-    let client = build_client()?;
+) -> HttpRequestInfo {
+    let request = HttpRequestMessage(buf.into());
+    let status = match do_make_request(buf, root_dir, file_path).await {
+        Ok((response, elapsed)) => {
+            RequestStatus::Complete { response, elapsed }
+        }
+        Err(err) => RequestStatus::Feiled {
+            error: err.to_string(),
+        },
+    };
 
-    let mut request = HttpMessage::default();
-    for line in buf.lines() {
-        writeln!(request.header, "> {}", line)?;
-    }
-    writeln!(request.header)?;
+    HttpRequestInfo::new(request, status)
+}
+
+// FIXME: DRY request.rs
+async fn do_make_request(
+    buf: &str,
+    root_dir: &Path,
+    file_path: &Path,
+) -> Result<(HttpMessage, Duration)> {
+    let client = build_client()?;
 
     let (res, elapsed) = do_request(&client, buf).await?;
 
@@ -665,7 +668,7 @@ async fn make_request(
         update_data(&vars)?;
     }
 
-    Ok(HttpRequestInfo::new(request, RequestStatus::Complete { response, elapsed }))
+    Ok((response, elapsed))
 }
 
 impl SelectItem for Value {
