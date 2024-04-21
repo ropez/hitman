@@ -15,18 +15,21 @@ use super::{
 };
 
 #[derive(Default, Clone)]
+pub struct HttpRequestMessage(pub String);
+
+#[derive(Default, Clone)]
 pub struct HttpMessage {
     pub header: String,
     pub body: String,
 }
 
 pub struct HttpRequestInfo {
-    request: HttpMessage,
+    request: HttpRequestMessage,
     status: RequestStatus,
 }
 
 impl HttpRequestInfo {
-    pub fn new(request: HttpMessage, status: RequestStatus) -> Self {
+    pub fn new(request: HttpRequestMessage, status: RequestStatus) -> Self {
         Self { request, status }
     }
 }
@@ -55,15 +58,6 @@ impl OutputView {
         self.request_info = Some(info);
     }
 
-    pub fn show_error(&mut self, error: String) {
-        if let Some(info) = &self.request_info {
-            self.request_info = Some(HttpRequestInfo {
-                request: info.request.clone(),
-                status: RequestStatus::Feiled { error },
-            });
-        }
-    }
-
     pub fn reset(&mut self) {
         self.scroll = (0, 0);
         self.request_info = None;
@@ -89,11 +83,12 @@ impl Component for OutputView {
         if let Some(info) = &self.request_info {
             let blue = Style::new().blue();
             let req_lines = info
-                .request
-                .header
+                .request.0
                 .lines()
-                .map(|line| Line::styled(line, blue));
+                .map(|line| Line::styled(format!("> {line}"), blue));
             lines.extend(req_lines);
+
+            lines.push(Line::default());
 
             match &info.status {
                 RequestStatus::Pending => (),
