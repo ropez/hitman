@@ -83,7 +83,8 @@ impl Component for OutputView {
         if let Some(info) = &self.request_info {
             let blue = Style::new().blue();
             let req_lines = info
-                .request.0
+                .request
+                .0
                 .lines()
                 .map(|line| Line::styled(format!("> {line}"), blue));
             lines.extend(req_lines);
@@ -93,7 +94,7 @@ impl Component for OutputView {
             match &info.status {
                 RequestStatus::Pending => (),
                 RequestStatus::Running => (),
-                RequestStatus::Complete { response, elapsed } => {
+                RequestStatus::Complete { response, .. } => {
                     let green = Style::new().green();
                     let res_lines = response
                         .header
@@ -117,10 +118,25 @@ impl Component for OutputView {
             }
         }
 
+        let title_bottom = if let Some(info) = &self.request_info {
+            if let RequestStatus::Complete { elapsed, .. } = &info.status {
+                format!("Elapsed: {:.2?}", elapsed)
+            } else {
+                String::new()
+            }
+        } else {
+            String::new()
+        };
+
         let para = Paragraph::new(Text::from(lines))
             .wrap(Wrap::default())
             .scroll(self.scroll)
-            .block(Block::default().title("Output").borders(Borders::ALL));
+            .block(
+                Block::default()
+                    .title("Output")
+                    .title_bottom(title_bottom)
+                    .borders(Borders::ALL),
+            );
 
         frame.render_widget(para, area);
     }
