@@ -135,7 +135,8 @@ impl Component for OutputView {
                 Block::default()
                     .title("Output")
                     .title_bottom(title_bottom)
-                    .borders(Borders::ALL),
+                    .borders(Borders::ALL)
+                    .border_set(ratatui::symbols::border::ROUNDED)
             );
 
         frame.render_widget(para, area);
