@@ -5,6 +5,8 @@ pub enum KeyMapping {
 
     Up,
     Down,
+    Left,
+    Right,
     Abort,
     Accept,
     ScrollUp,
@@ -31,10 +33,14 @@ fn mapkey_keypress(key: &KeyEvent) -> KeyMapping {
     match (key.modifiers, key.code) {
         (KeyModifiers::NONE, Up) => KeyMapping::Up,
         (KeyModifiers::NONE, Down) => KeyMapping::Down,
+        (KeyModifiers::NONE, Left) => KeyMapping::Left,
+        (KeyModifiers::NONE, Right) => KeyMapping::Right,
         (KeyModifiers::NONE, Esc) => KeyMapping::Abort,
         (KeyModifiers::NONE, Enter) => KeyMapping::Accept,
         (KeyModifiers::CONTROL, Char('k')) => KeyMapping::Up,
         (KeyModifiers::CONTROL, Char('j')) => KeyMapping::Down,
+        (KeyModifiers::CONTROL, Char('h')) => KeyMapping::Left,
+        (KeyModifiers::CONTROL, Char('l')) => KeyMapping::Right,
         (KeyModifiers::CONTROL, Char('p')) => KeyMapping::Up,
         (KeyModifiers::CONTROL, Char('n')) => KeyMapping::Down,
         (KeyModifiers::CONTROL, Char('c')) => KeyMapping::Abort,
