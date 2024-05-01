@@ -3,7 +3,7 @@ use fuzzy_matcher::skim::SkimMatcherV2;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Style, Stylize},
-    symbols,
+    symbols::{border, line},
     text::{Line, Span},
     widgets::{
         Block, Borders, Clear, HighlightSpacing, List, ListItem, ListState,
@@ -238,7 +238,12 @@ where
 
         let list = List::new(list_items)
             .block(
-                Block::new()
+                Block::bordered()
+                    .border_set(border::Set {
+                        bottom_left: border::PLAIN.bottom_left,
+                        bottom_right: border::PLAIN.bottom_right,
+                        ..border::ROUNDED
+                    })
                     .borders(Borders::TOP | Borders::LEFT | Borders::RIGHT)
                     .title(self.title.clone()),
             )
@@ -254,10 +259,10 @@ where
             label,
             Span::from(self.search_input.value()).yellow(),
         ]);
-        let block = Block::bordered().border_set(symbols::border::Set {
-            top_left: symbols::border::PLAIN.vertical_right,
-            top_right: symbols::border::PLAIN.vertical_left,
-            ..symbols::border::PLAIN
+        let block = Block::bordered().border_set(border::Set {
+            top_left: line::NORMAL.vertical_right,
+            top_right: line::NORMAL.vertical_left,
+            ..border::ROUNDED
         });
         let inner = block.inner(layout[1]);
         frame.render_widget(Paragraph::new(text).block(block), layout[1]);
