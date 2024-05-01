@@ -1,12 +1,14 @@
 use chrono::{Datelike, Days, Local, Months, NaiveDate, Weekday};
 use ratatui::{
-    layout::{Constraint, Direction, Layout},
+    layout::{Constraint, Layout},
+    prelude::{Alignment::Center, Margin},
     style::{Style, Stylize},
     text::{Line, Span},
     widgets::{Block, Clear, Paragraph},
 };
 
 use super::{
+    centered,
     keymap::{mapkey, KeyMapping},
     Component, PromptComponent, PromptIntent,
 };
@@ -25,7 +27,13 @@ impl DatePicker {
     }
 
     pub fn with_fallback(self, fallback: Option<String>) -> Self {
-        self
+        Self {
+            selected: fallback
+                .map(|f| f.parse::<NaiveDate>().ok())
+                .flatten()
+                .unwrap_or(self.selected),
+            ..self
+        }
     }
 }
 
@@ -35,19 +43,7 @@ impl Component for DatePicker {
         frame: &mut ratatui::Frame,
         area: ratatui::prelude::Rect,
     ) {
-        let chunks = Layout::new(
-            Direction::Vertical,
-            [
-                Constraint::Percentage(50),
-                Constraint::Length(12),
-                Constraint::Percentage(50),
-            ],
-        )
-        .split(area);
-
-        let area = chunks[1];
-
-        let block = Block::bordered().title(self.title.clone());
+        let area = centered(area, 32, 14);
 
         let today = Local::now().date_naive();
         let date = self.selected;
@@ -59,7 +55,18 @@ impl Component for DatePicker {
 
         let start = start.week(Weekday::Mon).first_day();
 
-        let mut lines: Vec<_> = start
+        let weekdays = Line::from(
+            start
+                .iter_days()
+                .take(7)
+                .map(|d| {
+                    Span::raw(format!(" {}", d.format("%a")))
+                        .style(Style::new().white())
+                })
+                .collect::<Vec<_>>(),
+        );
+
+        let calendar: Vec<_> = start
             .iter_weeks()
             .take_while(|d| *d < end)
             .map(|d| {
@@ -74,9 +81,9 @@ impl Component for DatePicker {
                         } else if d.month() != date.month() {
                             Style::new().dark_gray()
                         } else {
-                            Style::new()
+                            Style::new().white()
                         };
-                        Span::raw(format!("{:>3} ", d.day())).style(style)
+                        Span::raw(format!(" {} ", d.format("%_d"))).style(style)
                     })
                     .collect();
 
@@ -84,14 +91,34 @@ impl Component for DatePicker {
             })
             .collect();
 
-        lines.insert(0, Line::raw(""));
-        lines.insert(0, Line::raw(format!("{}", date.format("%B %Y"))));
-        lines.insert(0, Line::raw(""));
-        lines.push(Line::raw(""));
-        lines.push(Line::from(format!("Date: {}", date)));
+        let block = Block::bordered().cyan().title(self.title.clone());
+
+        let inner_layout = Layout::vertical([
+            Constraint::Length(1),
+            Constraint::Length(2),
+            Constraint::Length(1),
+            Constraint::Fill(1),
+            Constraint::Length(1),
+        ])
+        .split(block.inner(area));
 
         frame.render_widget(Clear, area);
-        frame.render_widget(Paragraph::new(lines).block(block), area);
+        frame.render_widget(block, area);
+
+        let heading =
+            Line::raw(format!("{}", date.format("%B %Y"))).alignment(Center);
+        frame.render_widget(Paragraph::new(vec![heading]), inner_layout[1]);
+
+        frame.render_widget(Paragraph::new(weekdays), inner_layout[2]);
+        frame.render_widget(
+            Paragraph::new(calendar),
+            inner_layout[3].inner(&Margin::new(1, 0)),
+        );
+
+        let current = Line::from(format!("{}", date))
+            .alignment(Center)
+            .style(Style::new().white());
+        frame.render_widget(Paragraph::new(vec![current]), inner_layout[4]);
     }
 }
 
@@ -101,6 +128,14 @@ impl PromptComponent for DatePicker {
         event: &crossterm::event::Event,
     ) -> Option<super::PromptIntent> {
         match mapkey(event) {
+            KeyMapping::ScrollUp => {
+                self.selected =
+                    self.selected.checked_sub_months(Months::new(1)).unwrap();
+            }
+            KeyMapping::ScrollDown => {
+                self.selected =
+                    self.selected.checked_add_months(Months::new(1)).unwrap();
+            }
             KeyMapping::Up => {
                 self.selected =
                     self.selected.checked_sub_days(Days::new(7)).unwrap();

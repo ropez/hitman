@@ -1,12 +1,15 @@
 use crossterm::event::Event;
 use ratatui::{
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::Rect,
+    style::Stylize,
+    text::{Line, Span},
     widgets::{Block, Clear, Paragraph},
-    Frame, text::{Span, Line}, style::Stylize,
+    Frame,
 };
 use tui_input::{backend::crossterm::EventHandler, Input};
 
 use super::{
+    centered,
     keymap::{mapkey, KeyMapping},
     Component, PromptComponent, PromptIntent,
 };
@@ -45,19 +48,9 @@ impl SimplePrompt {
 
 impl Component for SimplePrompt {
     fn render_ui(&mut self, frame: &mut Frame, area: Rect) {
-        let chunks = Layout::new(
-            Direction::Vertical,
-            [
-                Constraint::Percentage(50),
-                Constraint::Length(3),
-                Constraint::Percentage(50),
-            ],
-        )
-        .split(area);
+        let area = centered(area, 40, 3);
 
-        let area = chunks[1];
-
-        let block = Block::bordered().title(self.title.clone());
+        let block = Block::bordered().cyan().title(self.title.clone());
         let inner = block.inner(area);
 
         let input_value = self.input.value();
@@ -74,11 +67,14 @@ impl Component for SimplePrompt {
 
         frame.render_widget(Clear, area);
         frame.render_widget(
-            Paragraph::new(Line::from(spans)).block(block),
+            Paragraph::new(Line::from(spans)).white().block(block),
             area,
         );
 
-        frame.set_cursor(inner.x + cur + self.input.visual_cursor() as u16, inner.y);
+        frame.set_cursor(
+            inner.x + cur + self.input.visual_cursor() as u16,
+            inner.y,
+        );
     }
 }
 
