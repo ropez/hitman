@@ -37,11 +37,14 @@ use crate::ui::{
 use super::{
     centered,
     keymap::{mapkey, KeyMapping},
-    output::{HttpMessage, OutputView, HttpRequestMessage},
+    output::{HttpMessage, HttpRequestMessage, OutputView},
     progress::Progress,
     prompt::SimplePrompt,
     select::{
         PromptSelectItem, RequestSelector, Select, SelectIntent, SelectItem,
+    },
+    datepicker::{
+        DatePicker,
     },
     Component, InteractiveComponent, PromptComponent,
 };
@@ -219,12 +222,23 @@ impl App {
                         ))
                     }
 
-                    AskForValueParams::Prompt { fallback } => Box::new(
-                        SimplePrompt::new(format!(
-                            "Enter value for {{{{{key}}}}}"
-                        ))
-                        .with_fallback(fallback),
-                    ),
+                    AskForValueParams::Prompt { fallback } => {
+                        if key.ends_with("_date") || key.ends_with("Date") {
+                            Box::new(
+                                DatePicker::new(format!(
+                                    "Select {{{{{key}}}}}"
+                                ))
+                                .with_fallback(fallback),
+                            )
+                        } else {
+                            Box::new(
+                                SimplePrompt::new(format!(
+                                    "Enter value for {{{{{key}}}}}"
+                                ))
+                                .with_fallback(fallback),
+                            )
+                        }
+                    }
                 };
 
                 self.set_state(AppState::PendingValue {
