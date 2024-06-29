@@ -136,7 +136,7 @@ impl Component for OutputView {
                     .title("Output")
                     .title_bottom(title_bottom)
                     .borders(Borders::ALL)
-                    .border_set(ratatui::symbols::border::ROUNDED)
+                    .border_set(ratatui::symbols::border::ROUNDED),
             );
 
         frame.render_widget(para, area);

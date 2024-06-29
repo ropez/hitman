@@ -6,10 +6,12 @@ use std::env::current_dir;
 use std::path::Path;
 use tokio::sync::mpsc;
 
-use hitman::request::make_request;
+use hitman::env::{
+    find_available_requests, find_root_dir, load_env, select_env, watch_list,
+};
 use hitman::flurry::flurry_attack;
-use hitman::env::{find_available_requests, find_root_dir, load_env, select_env, watch_list};
 use hitman::prompt::{fuzzy_match, set_interactive_mode};
+use hitman::request::make_request;
 
 use watcher::Watcher;
 
@@ -109,13 +111,21 @@ fn is_user_cancelation(err: &anyhow::Error) -> bool {
         || matches!(err.downcast_ref(), Some(OperationInterrupted))
 }
 
-async fn run_once(root_dir: &Path, file_path: &Path, options: &[(String, String)]) -> Result<()> {
+async fn run_once(
+    root_dir: &Path,
+    file_path: &Path,
+    options: &[(String, String)],
+) -> Result<()> {
     let env = load_env(root_dir, file_path, options)?;
 
     make_request(file_path, &env).await
 }
 
-async fn watch_mode(root_dir: &Path, file_path: &Path, options: &[(String, String)]) -> Result<()> {
+async fn watch_mode(
+    root_dir: &Path,
+    file_path: &Path,
+    options: &[(String, String)],
+) -> Result<()> {
     let (tx, mut rx) = mpsc::channel(1);
 
     let paths = watch_list(root_dir, file_path);

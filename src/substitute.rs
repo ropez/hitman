@@ -5,10 +5,16 @@ use toml::{Table, Value};
 #[derive(Error, Debug, Clone)]
 pub enum SubstituteError {
     #[error("Missing substitution value for {key}")]
-    ValueNotFound { key: String, fallback: Option<String> },
+    ValueNotFound {
+        key: String,
+        fallback: Option<String>,
+    },
 
     #[error("Found multiple possible substitutions for {key}")]
-    MultipleValuesFound { key: String, values: Vec<toml::Value> },
+    MultipleValuesFound {
+        key: String,
+        values: Vec<toml::Value>,
+    },
 
     #[error("Syntax error")]
     SyntaxError,
@@ -85,12 +91,10 @@ fn find_replacement(
         Some(Value::Integer(v)) => Ok(parse(&v.to_string())),
         Some(Value::Float(v)) => Ok(parse(&v.to_string())),
         Some(Value::Boolean(v)) => Ok(parse(&v.to_string())),
-        Some(Value::Array(arr)) => {
-            Err(SubstituteError::MultipleValuesFound {
-                key: parsed_key,
-                values: arr.clone(),
-            })
-        }
+        Some(Value::Array(arr)) => Err(SubstituteError::MultipleValuesFound {
+            key: parsed_key,
+            values: arr.clone(),
+        }),
         Some(_) => Err(SubstituteError::TypeNotSupported),
         None => {
             let fallback = parts.next().map(|fb| fb.trim().to_string());

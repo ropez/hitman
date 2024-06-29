@@ -1,9 +1,10 @@
 use anyhow::{Context, Result};
 use httparse::Status::*;
 use log::{info, log_enabled, warn, Level};
+use regex::Regex;
 use reqwest::{Client, Method, Response, Url};
-use serde_json::Value;
-use spinoff::{Spinner, spinners, Color, Streams};
+use serde_json::{json, Value};
+use spinoff::{spinners, Color, Spinner, Streams};
 use std::{
     fs::read_to_string,
     path::Path,
@@ -20,7 +21,8 @@ use crate::{
     util::truncate,
 };
 
-static USER_AGENT: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"),);
+static USER_AGENT: &str =
+    concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"),);
 
 pub fn build_client() -> Result<Client> {
     let client = Client::builder()
@@ -35,13 +37,21 @@ pub async fn make_request(file_path: &Path, env: &Table) -> Result<()> {
 
     let interaction = get_interaction();
 
-    let buf = substitute_interactive(&read_to_string(file_path)?, env, interaction.as_ref())?;
+    let buf = substitute_interactive(
+        &read_to_string(file_path)?,
+        env,
+        interaction.as_ref(),
+    )?;
 
     clear_screen();
     print_request(&buf);
 
-    let mut spinner =
-        Spinner::new_with_stream(spinners::BouncingBar, "", Color::Yellow, Streams::Stderr);
+    let mut spinner = Spinner::new_with_stream(
+        spinners::BouncingBar,
+        "",
+        Color::Yellow,
+        Streams::Stderr,
+    );
     let (response, elapsed) = do_request(&client, &buf).await?;
     spinner.stop();
 
@@ -72,11 +82,16 @@ fn clear_screen() {
     }
 }
 
-pub async fn do_request(client: &Client, buf: &str) -> Result<(Response, Duration)> {
+pub async fn do_request(
+    client: &Client,
+    buf: &str,
+) -> Result<(Response, Duration)> {
     let mut headers = [httparse::EMPTY_HEADER; 64];
     let mut req = httparse::Request::new(&mut headers);
 
-    let parse_result = req.parse(buf.as_bytes()).context("Invalid input: malformed request")?;
+    let parse_result = req
+        .parse(buf.as_bytes())
+        .context("Invalid input: malformed request")?;
 
     let method = req.method.context("Invalid input: HTTP method not found")?;
     let url = req.path.context("Invalid input: URL not found")?;
@@ -88,7 +103,35 @@ pub async fn do_request(client: &Client, buf: &str) -> Result<(Response, Duratio
 
     if let Complete(offset) = parse_result {
         let body = &buf[offset..];
-        builder = builder.body(body.to_owned());
+
+        if body.starts_with("query") || body.starts_with("mutation") {
+            // Split when we find a closing bracket, followed by two or more
+            // newlines, and then a starting bracket. This should be
+            // the space between the body and the potential
+            // variables defined for graphql
+            let pattern = Regex::new(r"\}\n{2,}\{").unwrap();
+            match pattern.splitn(body, 2).collect::<Vec<&str>>().as_slice() {
+                [body, variables] => {
+                    let body = format!("{}{}", body, "}");
+                    let variables = format!("{}{}", "{", variables);
+
+                    let variables: serde_json::Value =
+                        serde_json::from_str(&variables)
+                            .expect("Invalid JSON for variables");
+
+                    let json_string =
+                        json!({"query": body, "variables": variables})
+                            .to_string();
+                    builder = builder.body(json_string);
+                }
+                _ => {
+                    let json_string = json!({"query": body}).to_string();
+                    builder = builder.body(json_string);
+                }
+            }
+        } else {
+            builder = builder.body(body.to_owned());
+        }
     }
 
     for header in req.headers {
