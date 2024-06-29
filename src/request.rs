@@ -1,9 +1,10 @@
 use anyhow::{Context, Result};
 use httparse::Status::*;
 use log::{info, log_enabled, warn, Level};
+use regex::Regex;
 use reqwest::{Client, Method, Response, Url};
-use serde_json::Value;
-use spinoff::{Spinner, spinners, Color, Streams};
+use serde_json::{json, Value};
+use spinoff::{spinners, Color, Spinner, Streams};
 use std::{
     fs::read_to_string,
     path::Path,
@@ -88,7 +89,30 @@ pub async fn do_request(client: &Client, buf: &str) -> Result<(Response, Duratio
 
     if let Complete(offset) = parse_result {
         let body = &buf[offset..];
-        builder = builder.body(body.to_owned());
+
+        if body.starts_with("query") || body.starts_with("mutation") {
+            // Split when we find a closing bracket, followed by two or more newlines, and then a
+            // starting bracket. This should be the space between the body and the potential
+            // variables defined for graphql
+            let pattern = Regex::new(r"\}\n{2,}\{").unwrap();
+            match pattern.splitn(body, 2).collect::<Vec<&str>>().as_slice() {
+                [body, variables] => {
+                    let body = format!("{}{}", body, "}");
+                    let variables = format!("{}{}", "{", variables);
+
+                    let variables: serde_json::Value = serde_json::from_str(&variables).expect("Invalid JSON for variables");
+
+                    let json_string = json!({"query": body, "variables": variables}).to_string();
+                    builder = builder.body(json_string);
+                }
+                _ => {
+                    let json_string = json!({"query": body}).to_string();
+                    builder = builder.body(json_string);
+                },
+            }
+        } else {
+            builder = builder.body(body.to_owned());
+        }
     }
 
     for header in req.headers {
