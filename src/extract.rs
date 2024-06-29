@@ -17,45 +17,74 @@ pub fn extract_variables(data: &JsonValue, scope: &Table) -> Result<Table> {
                     Value::String(jsonpath) => {
                         let selector = make_selector(jsonpath)?;
 
-                        if let Some(JsonValue::String(val)) = selector.find(data).next() {
-                            let msg = format!("# Got string '{}' = '{}'", key, val);
+                        if let Some(JsonValue::String(val)) =
+                            selector.find(data).next()
+                        {
+                            let msg =
+                                format!("# Got string '{}' = '{}'", key, val);
                             info!("{}", truncate(&msg));
 
-                            out.insert(key.clone(), Value::String(String::from(val)));
+                            out.insert(
+                                key.clone(),
+                                Value::String(String::from(val)),
+                            );
                         }
-                        if let Some(JsonValue::Number(val)) = selector.find(data).next() {
+                        if let Some(JsonValue::Number(val)) =
+                            selector.find(data).next()
+                        {
                             if let Some(integer) = val.as_i64() {
-                                let msg = format!("# Got integer '{}' = '{}'", key, val);
+                                let msg = format!(
+                                    "# Got integer '{}' = '{}'",
+                                    key, val
+                                );
                                 info!("{}", truncate(&msg));
-                                out.insert(key.clone(), Value::Integer(integer));
+                                out.insert(
+                                    key.clone(),
+                                    Value::Integer(integer),
+                                );
                             }
                         }
                     }
                     Value::Table(conf) => {
-                        let items_selector = make_selector(&get_string(conf, "_")?)?;
+                        let items_selector =
+                            make_selector(&get_string(conf, "_")?)?;
                         let value_selectors = make_item_selectors(conf)?;
 
-                        // jsonpath returns an iterator that contains one element,
-                        // which is the JSON array.
+                        // jsonpath returns an iterator that contains one
+                        // element, which is the JSON
+                        // array.
 
-                        if let Some(JsonValue::Array(items)) = items_selector.find(data).next() {
+                        if let Some(JsonValue::Array(items)) =
+                            items_selector.find(data).next()
+                        {
                             let mut toml_items: Vec<Value> = Vec::new();
 
                             for item_json in items {
                                 let mut toml_item = Table::new();
                                 for (name, selector) in value_selectors.iter() {
-                                    if let Some(v) = selector.find(item_json).next() {
-                                        toml_item.insert(name.clone(), Value::try_from(v)?);
+                                    if let Some(v) =
+                                        selector.find(item_json).next()
+                                    {
+                                        toml_item.insert(
+                                            name.clone(),
+                                            Value::try_from(v)?,
+                                        );
                                     }
                                 }
 
-                                let raw_json = Value::try_from(item_json.to_string())?;
-                                toml_item.insert(String::from("_raw"), raw_json);
+                                let raw_json =
+                                    Value::try_from(item_json.to_string())?;
+                                toml_item
+                                    .insert(String::from("_raw"), raw_json);
 
                                 toml_items.push(Value::Table(toml_item));
                             }
 
-                            let msg = format!("# Got '{}' with {} elements", key, toml_items.len());
+                            let msg = format!(
+                                "# Got '{}' with {} elements",
+                                key,
+                                toml_items.len()
+                            );
                             info!("{}", truncate(&msg));
 
                             out.insert(key.clone(), Value::Array(toml_items));

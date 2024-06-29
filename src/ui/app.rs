@@ -36,15 +36,13 @@ use crate::ui::{
 
 use super::{
     centered,
+    datepicker::DatePicker,
     keymap::{mapkey, KeyMapping},
     output::{HttpMessage, HttpRequestMessage, OutputView},
     progress::Progress,
     prompt::SimplePrompt,
     select::{
         PromptSelectItem, RequestSelector, Select, SelectIntent, SelectItem,
-    },
-    datepicker::{
-        DatePicker,
     },
     Component, InteractiveComponent, PromptComponent,
 };
