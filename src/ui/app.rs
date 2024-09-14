@@ -64,6 +64,7 @@ pub struct App {
     state: AppState,
     error: Option<String>,
     should_quit: bool,
+    vsplit: u16,
 }
 
 pub enum AppState {
@@ -134,6 +135,7 @@ impl App {
             state: AppState::Idle,
             error: None,
             should_quit: false,
+            vsplit: 60,
         };
 
         app.populate_requests()?;
@@ -509,6 +511,16 @@ impl InteractiveComponent for App {
                             KeyMapping::SelectTarget => {
                                 return Some(Intent::SelectTarget);
                             }
+                            KeyMapping::IncreaseWidth => {
+                                self.vsplit += 5;
+                            }
+                            KeyMapping::DecreaseWitdh => {
+                                if self.vsplit <= 20 {
+                                    self.vsplit = 15;
+                                } else {
+                                    self.vsplit -= 5;
+                                }
+                            }
                             _ => (),
                         }
                     }
@@ -558,7 +570,7 @@ impl App {
     fn render_main(&mut self, frame: &mut Frame, area: Rect) {
         let layout = Layout::new(
             Direction::Horizontal,
-            [Constraint::Max(60), Constraint::Min(1)],
+            [Constraint::Max(self.vsplit), Constraint::Min(1)],
         )
         .split(area);
 
@@ -594,7 +606,7 @@ impl App {
         let status_line = match &self.error {
             Some(msg) => Paragraph::new(msg.clone()).red().reversed(),
             None => Paragraph::new(
-                "Ctrl+S: Select target, Ctrl+E: Edit selected request, Ctrl+R: New request, Ctrl+W: Tottle output wrapping",
+                "Ctrl+S: Select target, Ctrl+E: Edit selected request, Ctrl+R: New request, [<>] Adjust width, [,] Tottle wrapping",
             )
             .dark_gray(),
         };

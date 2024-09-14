@@ -16,6 +16,8 @@ pub enum KeyMapping {
     Reload,
     Editor,
     New,
+    IncreaseWidth,
+    DecreaseWitdh,
 }
 
 pub fn mapkey(event: &Event) -> KeyMapping {
@@ -48,10 +50,13 @@ fn mapkey_keypress(key: &KeyEvent) -> KeyMapping {
         (KeyModifiers::CONTROL, Char('u')) => KeyMapping::ScrollUp,
         (KeyModifiers::CONTROL, Char('d')) => KeyMapping::ScrollDown,
         (KeyModifiers::CONTROL, Char('s')) => KeyMapping::SelectTarget,
-        (KeyModifiers::CONTROL, Char('w')) => KeyMapping::ToggleWrap,
         (KeyModifiers::CONTROL, Char('r')) => KeyMapping::Reload,
         (KeyModifiers::CONTROL, Char('e')) => KeyMapping::Editor,
         (KeyModifiers::CONTROL, Char('a')) => KeyMapping::New,
+        (KeyModifiers::NONE, Char('<')) => KeyMapping::DecreaseWitdh,
+        (KeyModifiers::NONE, Char('>')) => KeyMapping::IncreaseWidth,
+        (KeyModifiers::NONE, Char(';')) => KeyMapping::ToggleWrap,
+        (KeyModifiers::NONE, Char(',')) => KeyMapping::ToggleWrap,
 
         _ => KeyMapping::None,
     }
