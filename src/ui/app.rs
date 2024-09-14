@@ -36,15 +36,13 @@ use crate::ui::{
 
 use super::{
     centered,
+    datepicker::DatePicker,
     keymap::{mapkey, KeyMapping},
     output::{HttpMessage, HttpRequestMessage, OutputView},
     progress::Progress,
     prompt::SimplePrompt,
     select::{
         PromptSelectItem, RequestSelector, Select, SelectIntent, SelectItem,
-    },
-    datepicker::{
-        DatePicker,
     },
     Component, InteractiveComponent, PromptComponent,
 };
@@ -202,7 +200,7 @@ impl App {
             } => {
                 let req = HttpRequestMessage(prepared_request.clone());
                 let info = HttpRequestInfo::new(req, RequestStatus::Running);
-                self.output_view.update(info);
+                self.output_view.show_request(info);
                 self.send_request(file_path, prepared_request)?;
             }
             AskForValue {
@@ -249,7 +247,7 @@ impl App {
                 });
             }
             ShowResult(info) => {
-                self.output_view.update(info);
+                self.output_view.show_request(info);
                 self.set_state(AppState::Idle);
             }
             SelectTarget => {
@@ -378,12 +376,10 @@ impl App {
             // TODO: Highlight substitutions and current values
 
             let f = read_to_string(path.clone())?;
-            let req = HttpRequestMessage(f);
 
             self.request_selector.try_select(&file_path);
 
-            let info = HttpRequestInfo::new(req, RequestStatus::Pending);
-            self.output_view.update(info);
+            self.output_view.show_preview(f);
         } else {
             self.output_view.reset();
         }
@@ -598,7 +594,7 @@ impl App {
         let status_line = match &self.error {
             Some(msg) => Paragraph::new(msg.clone()).red().reversed(),
             None => Paragraph::new(
-                "Ctrl+S: Select target, Ctrl+E: Edit selected request, Ctrl+R: New request",
+                "Ctrl+S: Select target, Ctrl+E: Edit selected request, Ctrl+R: New request, Ctrl+W: Tottle output wrapping",
             )
             .dark_gray(),
         };
