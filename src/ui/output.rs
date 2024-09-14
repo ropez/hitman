@@ -40,7 +40,7 @@ pub enum RequestStatus {
         response: HttpMessage,
         elapsed: Duration,
     },
-    Feiled {
+    Failed {
         error: String,
     },
 }
@@ -123,7 +123,7 @@ impl Component for OutputView {
                             .map(|line| Line::styled(line, normal));
                         lines.extend(res_body_lines);
                     }
-                    RequestStatus::Feiled { error } => {
+                    RequestStatus::Failed { error } => {
                         let yellow = Style::new().yellow();
                         let res_body_lines = error
                             .lines()
