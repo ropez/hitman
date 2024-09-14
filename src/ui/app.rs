@@ -651,7 +651,7 @@ async fn make_request(
         Ok((response, elapsed)) => {
             RequestStatus::Complete { response, elapsed }
         }
-        Err(err) => RequestStatus::Feiled {
+        Err(err) => RequestStatus::Failed {
             error: err.to_string(),
         },
     };
