@@ -57,6 +57,7 @@ pub enum Content {
 pub struct OutputView {
     content: Content,
     scroll: (u16, u16),
+    noheaders: bool,
     nowrap: bool,
 }
 
@@ -87,6 +88,27 @@ impl OutputView {
     pub fn scroll_down(&mut self) {
         self.scroll.0 += 5;
     }
+
+    fn title(&self) -> &'static str {
+        let title = match &self.content {
+            Content::Empty => "",
+            Content::Preview(_) => "Preview",
+            Content::Request(_) => "Output",
+        };
+        title
+    }
+
+    fn mode_string(&self) -> String {
+        let mut s = String::new();
+        if !self.noheaders {
+            s.push('H');
+        }
+        if !self.nowrap {
+            s.push('W');
+        }
+
+        s
+    }
 }
 
 impl Component for OutputView {
@@ -101,10 +123,13 @@ impl Component for OutputView {
                     .request
                     .0
                     .lines()
+                    .take(if self.noheaders { 1 } else { usize::MAX })
                     .map(|line| Line::styled(format!("> {line}"), blue));
                 lines.extend(req_lines);
 
-                lines.push(Line::default());
+                if !self.noheaders {
+                    lines.push(Line::default());
+                }
 
                 match &info.status {
                     RequestStatus::Running => (),
@@ -113,6 +138,7 @@ impl Component for OutputView {
                         let res_lines = response
                             .header
                             .lines()
+                            .take(if self.noheaders { 1 } else { usize::MAX })
                             .map(|line| Line::styled(line, green));
                         lines.extend(res_lines);
 
@@ -141,12 +167,6 @@ impl Component for OutputView {
             }
         }
 
-        let title = match &self.content {
-            Content::Empty => "",
-            Content::Preview(_) => "Preview",
-            Content::Request(_) => "Output",
-        };
-
         let title_bottom = if let Content::Request(info) = &self.content {
             if let RequestStatus::Complete { elapsed, .. } = &info.status {
                 format!("Elapsed: {:.2?}", elapsed)
@@ -167,8 +187,9 @@ impl Component for OutputView {
 
         let para = para.scroll(self.scroll).block(
             Block::default()
-                .title(title)
+                .title(self.title())
                 .title_bottom(title_bottom)
+                .title_bottom(Line::from(self.mode_string()).right_aligned())
                 .borders(Borders::ALL)
                 .border_set(ratatui::symbols::border::ROUNDED),
         );
@@ -190,6 +211,9 @@ impl InteractiveComponent for OutputView {
             }
             KeyMapping::ToggleWrap => {
                 self.nowrap = !self.nowrap;
+            }
+            KeyMapping::ToggleHeaders => {
+                self.noheaders = !self.noheaders;
             }
             _ => (),
         }

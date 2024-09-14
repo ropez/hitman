@@ -603,6 +603,7 @@ impl App {
             layout[0],
         );
 
+        // FIXME: <Ctrl+?> opens key mapping window
         let status_line = match &self.error {
             Some(msg) => Paragraph::new(msg.clone()).red().reversed(),
             None => Paragraph::new(
