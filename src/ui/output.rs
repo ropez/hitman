@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use crossterm::event::Event;
+use hitman::request::HitmanRequest;
 use ratatui::{
     layout::Rect,
     style::{Style, Stylize},
@@ -21,8 +22,8 @@ use super::{
     Component, InteractiveComponent,
 };
 
-#[derive(Default, Clone)]
-pub struct HttpRequestMessage(pub String);
+#[derive(Clone)]
+pub struct HttpRequestMessage(pub HitmanRequest);
 
 #[derive(Default, Clone)]
 pub struct HttpMessage {
@@ -138,13 +139,14 @@ impl OutputView {
             Content::Empty => {}
             Content::Request(info) => {
                 let blue = Style::new().blue();
-                let req_lines = info
-                    .request
-                    .0
-                    .lines()
-                    .take(if self.noheaders { 1 } else { usize::MAX })
-                    .map(|line| Line::styled(format!("> {line}"), blue));
-                lines.extend(req_lines);
+                // TODO: Figure this out
+                // let req_lines = info
+                //     .request
+                //     .0
+                //     .lines()
+                //     .take(if self.noheaders { 1 } else { usize::MAX })
+                //     .map(|line| Line::styled(format!("> {line}"), blue));
+                // lines.extend(req_lines);
 
                 if !self.noheaders {
                     lines.push(Line::default());

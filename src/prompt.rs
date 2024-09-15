@@ -1,9 +1,12 @@
 use anyhow::{bail, Result};
 use inquire::{list_option::ListOption, DateSelect, Select, Text};
-use std::env;
+use std::{env, path::Path};
 use toml::{Table, Value};
 
-use crate::substitute::{substitute, SubstituteError};
+use crate::{
+    request::HitmanRequest,
+    substitute::{prepare_request, substitute, SubstituteError},
+};
 
 fn set_boolean(name: &str, value: bool) {
     env::set_var(name, if value { "y" } else { "n" });
@@ -54,6 +57,38 @@ pub fn get_interaction() -> Box<dyn UserInteraction> {
 pub trait UserInteraction {
     fn prompt(&self, key: &str, fallback: Option<&str>) -> Result<String>;
     fn select(&self, key: &str, values: &[Value]) -> Result<String>;
+}
+
+pub fn prepare_request_interactive<I>(
+    path: &Path,
+    env: &Table,
+    interaction: &I,
+) -> Result<HitmanRequest>
+where
+    I: UserInteraction + ?Sized,
+{
+    match prepare_request(path, env)? {
+        Ok(res) => Ok(res),
+        Err(err) => {
+            let (key, value) = match err {
+                SubstituteError::ValueNotFound { key, fallback } => {
+                    let value =
+                        interaction.prompt(&key, fallback.as_deref())?;
+                    (key, value)
+                }
+                SubstituteError::MultipleValuesFound { key, values } => {
+                    let value = interaction.select(&key, &values)?;
+                    (key, value)
+                }
+                e => bail!(e),
+            };
+
+            let mut env = env.clone();
+            env.insert(key, Value::String(value));
+
+            prepare_request_interactive(path, &env, interaction)
+        }
+    }
 }
 
 pub fn substitute_interactive<I>(

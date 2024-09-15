@@ -1,13 +1,16 @@
-use anyhow::{Context, Result};
-use httparse::Status::*;
+use anyhow::{anyhow, bail, Context, Result};
+use graphql_parser::query::{
+    Definition, OperationDefinition, VariableDefinition,
+};
+
 use log::{info, log_enabled, warn, Level};
-use reqwest::{Client, Method, Response, Url};
+use reqwest::{header::HeaderMap, Client, Method, Response, Url};
 use serde_json::Value;
 use spinoff::{spinners, Color, Spinner, Streams};
 use std::{
-    fs::read_to_string,
-    path::Path,
-    str::{self, FromStr},
+    fmt::Display,
+    path::{Path, PathBuf},
+    str::{self},
     sync::Arc,
     time::Duration,
 };
@@ -16,9 +19,17 @@ use toml::Table;
 use crate::{
     env::{update_data, HitmanCookieJar},
     extract::extract_variables,
-    prompt::{get_interaction, substitute_interactive},
+    prompt::{get_interaction, prepare_request_interactive},
     util::truncate,
 };
+
+#[derive(Clone)]
+pub struct HitmanRequest {
+    pub headers: HeaderMap,
+    pub url: Url,
+    pub method: Method,
+    pub body: Option<String>,
+}
 
 static USER_AGENT: &str =
     concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"),);
@@ -36,14 +47,11 @@ pub async fn make_request(file_path: &Path, env: &Table) -> Result<()> {
 
     let interaction = get_interaction();
 
-    let buf = substitute_interactive(
-        &read_to_string(file_path)?,
-        env,
-        interaction.as_ref(),
-    )?;
+    let req =
+        prepare_request_interactive(file_path, env, interaction.as_ref())?;
 
     clear_screen();
-    print_request(&buf);
+    print_request(&req);
 
     let mut spinner = Spinner::new_with_stream(
         spinners::BouncingBar,
@@ -51,7 +59,7 @@ pub async fn make_request(file_path: &Path, env: &Table) -> Result<()> {
         Color::Yellow,
         Streams::Stderr,
     );
-    let (response, elapsed) = do_request(&client, &buf).await?;
+    let (response, elapsed) = do_request(&client, &req).await?;
     spinner.stop();
 
     print_response(&response)?;
@@ -83,37 +91,12 @@ fn clear_screen() {
 
 pub async fn do_request(
     client: &Client,
-    buf: &str,
+    req: &HitmanRequest,
 ) -> Result<(Response, Duration)> {
-    let mut headers = [httparse::EMPTY_HEADER; 64];
-    let mut req = httparse::Request::new(&mut headers);
-
-    let parse_result = req
-        .parse(buf.as_bytes())
-        .context("Invalid input: malformed request")?;
-
-    let method = req.method.context("Invalid input: HTTP method not found")?;
-    let url = req.path.context("Invalid input: URL not found")?;
-
-    let method = Method::from_str(method)?;
-    let url = Url::parse(url)?;
-
-    let mut builder = client.request(method, url);
-
-    if let Complete(offset) = parse_result {
-        let body = &buf[offset..];
-        builder = builder.body(body.to_owned());
-    }
-
-    for header in req.headers {
-        // The parse_http crate is weird, it fills the array with empty headers
-        // if a partial request is parsed.
-        if header.name.is_empty() {
-            break;
-        }
-        let value = str::from_utf8(header.value)?;
-
-        builder = builder.header(String::from(header.name), value);
+    let mut builder = client.request(req.method.clone(), req.url.clone());
+    builder = builder.headers(req.headers.clone());
+    if let Some(ref body) = req.body {
+        builder = builder.body(body.to_string());
     }
 
     let t = std::time::Instant::now();
@@ -124,10 +107,18 @@ pub async fn do_request(
     Ok((response, elapsed))
 }
 
-fn print_request(buf: &str) {
+// NOTE: This is printing the gql request just like it is
+// sending it as a body in a http request
+fn print_request(req: &HitmanRequest) {
     if log_enabled!(Level::Info) {
-        for line in buf.lines() {
-            info!("> {}", truncate(line));
+        info!("> {}", truncate(req.url.as_str()));
+        for (key, val) in req.headers.iter() {
+            let header = format!("{}: {}", key.as_str(), val.to_str().unwrap());
+            info!("> {}", truncate(&header));
+        }
+
+        if let Some(ref body) = req.body {
+            info!("> {}", truncate(body));
         }
 
         info!("");
@@ -156,4 +147,75 @@ fn print_response(res: &Response) -> Result<()> {
     }
 
     Ok(())
+}
+
+// TODO: This is very similar to `find_root_dir`
+pub fn resolve_http_file(path: &Path) -> Result<PathBuf> {
+    let ext = path.extension().context("Couldn't find extension")?;
+    if ext != "gql" && ext != "graphql" {
+        return Ok(path.to_path_buf());
+    };
+
+    // &resolve_http_file(file_path)?.context("Couldn't find _graphql.http")?
+    let mut dir = path.parent().context("No parent")?.to_path_buf();
+    loop {
+        let file = dir.join("_graphql.http");
+        if file.exists() {
+            return Ok(file);
+        }
+        if let Some(parent) = dir.parent() {
+            dir = parent.to_path_buf();
+        } else {
+            return Err(anyhow!("Couldn't find _graphql.http"));
+        }
+    }
+}
+
+pub enum GraphQLOperation {
+    Query,
+    Mutation,
+}
+
+impl Display for GraphQLOperation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            GraphQLOperation::Query => write!(f, "query"),
+            GraphQLOperation::Mutation => write!(f, "mutation"),
+        }
+    }
+}
+
+pub struct GraphQLRequest {
+    pub operation: GraphQLOperation,
+    pub args: Vec<String>,
+}
+
+pub fn find_args<P>(path: P) -> Result<GraphQLRequest>
+where
+    P: AsRef<Path>,
+{
+    let file = std::fs::read_to_string(path)?;
+    let doc = graphql_parser::parse_query::<String>(&file)?;
+
+    let variables = |vars: &[VariableDefinition<String>]| {
+        vars.iter().map(|d| d.name.clone()).collect::<Vec<_>>()
+    };
+
+    let args = match doc.definitions[0] {
+        Definition::Operation(ref op) => match op {
+            OperationDefinition::Query(q) => GraphQLRequest {
+                operation: GraphQLOperation::Query,
+                args: variables(&q.variable_definitions),
+            },
+            OperationDefinition::Mutation(m) => GraphQLRequest {
+                operation: GraphQLOperation::Mutation,
+                args: variables(&m.variable_definitions),
+            },
+            OperationDefinition::SelectionSet(_) => bail!("Not supported"),
+            OperationDefinition::Subscription(_) => bail!("Not supported"),
+        },
+        Definition::Fragment(_) => bail!("Not supported"),
+    };
+
+    Ok(args)
 }
