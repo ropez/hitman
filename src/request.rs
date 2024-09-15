@@ -105,11 +105,11 @@ pub async fn do_request(
         let body = &buf[offset..];
 
         if body.starts_with("query") || body.starts_with("mutation") {
-            // Split when we find a closing bracket, followed by two or more
+            // Split when we find a closing bracket, followed by one or more
             // newlines, and then a starting bracket. This should be
             // the space between the body and the potential
             // variables defined for graphql
-            let pattern = Regex::new(r"\}\n{2,}\{").unwrap();
+            let pattern = Regex::new(r"\}\n{1,}\{").unwrap();
             match pattern.splitn(body, 2).collect::<Vec<&str>>().as_slice() {
                 [body, variables] => {
                     let body = format!("{}{}", body, "}");
