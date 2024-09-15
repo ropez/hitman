@@ -31,11 +31,19 @@ pub async fn flurry_attack(
     warn!("# Sending {flurry_size} requests on {connections} parallel connections...");
 
     let interaction = get_interaction();
-    let buf = substitute_interactive(&read_to_string(file_path)?, env, interaction.as_ref())?;
+    let buf = substitute_interactive(
+        &read_to_string(file_path)?,
+        env,
+        interaction.as_ref(),
+    )?;
 
     let t = std::time::Instant::now();
-    let mut spinner =
-        Spinner::new_with_stream(spinners::BouncingBall, "", Color::Yellow, Streams::Stderr);
+    let mut spinner = Spinner::new_with_stream(
+        spinners::BouncingBall,
+        "",
+        Color::Yellow,
+        Streams::Stderr,
+    );
 
     // Run each request in a separate tokio task.
     // It might make it more efficient, if we let each task run a series
@@ -47,7 +55,9 @@ pub async fn flurry_attack(
             let mut results = Vec::new();
             for _ in 0..size {
                 let res = match do_request(&client, &buf).await {
-                    Ok((res, elapsed)) => Some((res.status().as_u16(), elapsed)),
+                    Ok((res, elapsed)) => {
+                        Some((res.status().as_u16(), elapsed))
+                    }
                     Err(_) => None,
                 };
                 results.push(res);
@@ -67,7 +77,8 @@ pub async fn flurry_attack(
     spinner.stop();
     let elapsed = t.elapsed();
 
-    let average = results.iter().map(|(_, d)| d).sum::<Duration>() / results.len() as u32;
+    let average =
+        results.iter().map(|(_, d)| d).sum::<Duration>() / results.len() as u32;
 
     let statuses = results.iter().map(|(s, _)| s).counted();
     let statuses = statuses

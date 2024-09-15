@@ -3,7 +3,7 @@ use httparse::Status::*;
 use log::{info, log_enabled, warn, Level};
 use reqwest::{Client, Method, Response, Url};
 use serde_json::Value;
-use spinoff::{Spinner, spinners, Color, Streams};
+use spinoff::{spinners, Color, Spinner, Streams};
 use std::{
     fs::read_to_string,
     path::Path,
@@ -20,7 +20,8 @@ use crate::{
     util::truncate,
 };
 
-static USER_AGENT: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"),);
+static USER_AGENT: &str =
+    concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"),);
 
 pub fn build_client() -> Result<Client> {
     let client = Client::builder()
@@ -35,13 +36,21 @@ pub async fn make_request(file_path: &Path, env: &Table) -> Result<()> {
 
     let interaction = get_interaction();
 
-    let buf = substitute_interactive(&read_to_string(file_path)?, env, interaction.as_ref())?;
+    let buf = substitute_interactive(
+        &read_to_string(file_path)?,
+        env,
+        interaction.as_ref(),
+    )?;
 
     clear_screen();
     print_request(&buf);
 
-    let mut spinner =
-        Spinner::new_with_stream(spinners::BouncingBar, "", Color::Yellow, Streams::Stderr);
+    let mut spinner = Spinner::new_with_stream(
+        spinners::BouncingBar,
+        "",
+        Color::Yellow,
+        Streams::Stderr,
+    );
     let (response, elapsed) = do_request(&client, &buf).await?;
     spinner.stop();
 
@@ -72,11 +81,16 @@ fn clear_screen() {
     }
 }
 
-pub async fn do_request(client: &Client, buf: &str) -> Result<(Response, Duration)> {
+pub async fn do_request(
+    client: &Client,
+    buf: &str,
+) -> Result<(Response, Duration)> {
     let mut headers = [httparse::EMPTY_HEADER; 64];
     let mut req = httparse::Request::new(&mut headers);
 
-    let parse_result = req.parse(buf.as_bytes()).context("Invalid input: malformed request")?;
+    let parse_result = req
+        .parse(buf.as_bytes())
+        .context("Invalid input: malformed request")?;
 
     let method = req.method.context("Invalid input: HTTP method not found")?;
     let url = req.path.context("Invalid input: URL not found")?;

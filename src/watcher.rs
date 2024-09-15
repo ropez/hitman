@@ -1,5 +1,8 @@
 use anyhow::Result;
-use notify::{recommended_watcher, Event, RecommendedWatcher, RecursiveMode, Watcher as _Watcher};
+use notify::{
+    recommended_watcher, Event, RecommendedWatcher, RecursiveMode,
+    Watcher as _Watcher,
+};
 use std::path::PathBuf;
 
 pub struct Watcher {
@@ -8,7 +11,10 @@ pub struct Watcher {
 }
 
 impl Watcher {
-    pub fn new(tx: tokio::sync::mpsc::Sender<Event>, paths: Vec<PathBuf>) -> Result<Self> {
+    pub fn new(
+        tx: tokio::sync::mpsc::Sender<Event>,
+        paths: Vec<PathBuf>,
+    ) -> Result<Self> {
         let watcher = recommended_watcher(move |res| {
             if let Ok(event) = res {
                 tx.blocking_send(event).expect("send to channel");
