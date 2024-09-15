@@ -1,6 +1,20 @@
-use std::str;
+use anyhow::Context;
+use httparse::Status::{Complete, Partial};
+use reqwest::{
+    header::{HeaderMap, HeaderName, HeaderValue},
+    Method, Url,
+};
+use serde_json::json;
+use std::{
+    collections::HashMap,
+    fs::read_to_string,
+    path::Path,
+    str::{self, FromStr},
+};
 use thiserror::Error;
 use toml::{Table, Value};
+
+use crate::request::{find_args, resolve_http_file, HitmanRequest};
 
 #[derive(Error, Debug, Clone)]
 pub enum SubstituteError {
@@ -24,6 +38,94 @@ pub enum SubstituteError {
 }
 
 type SubstituteResult<T> = std::result::Result<T, SubstituteError>;
+
+pub fn prepare_request(
+    path: &Path,
+    env: &Table,
+) -> anyhow::Result<SubstituteResult<HitmanRequest>> {
+    let extension = path.extension().context("Couldn't get ext")?;
+    let http_file = resolve_http_file(path)?;
+    let input = read_to_string(&http_file)?;
+    let buf = match substitute(&input, env) {
+        Ok(buf) => buf,
+        Err(e) => return Ok(Err(e)),
+    };
+
+    let mut headers = [httparse::EMPTY_HEADER; 64];
+    let mut req = httparse::Request::new(&mut headers);
+
+    let parse_result = req
+        .parse(buf.as_bytes())
+        .context("Invalid input: malformed request")?;
+
+    let method = req.method.context("Invalid input: HTTP method not found")?;
+    let url = req.path.context("Invalid input: URL not found")?;
+
+    let method = Method::from_str(method)?;
+    let url = Url::parse(url)?;
+
+    let mut map = HeaderMap::new();
+
+    let body = if extension == "gql" || extension == "graphql" {
+        let body = read_to_string(path)?;
+        let gql = find_args(path)?;
+        let vars = match substitute_graphql(&gql.args, env) {
+            Ok(vars) => vars,
+            Err(e) => return Ok(Err(e)),
+        };
+
+        if vars.is_empty() {
+            Some(json!({gql.operation.to_string(): body}).to_string())
+        } else {
+            let mut map: HashMap<String, String> = HashMap::new();
+
+            for (key, value) in gql.args.into_iter().zip(vars.into_iter()) {
+                map.insert(key, value);
+            }
+
+            let variables = serde_json::to_value(map)?;
+            Some(json!({gql.operation.to_string(): body, "variables": variables})
+                .to_string())
+        }
+    } else {
+        match parse_result {
+            Complete(offset) => Some(buf[offset..].to_string()),
+            Partial => None,
+        }
+    };
+
+    for header in req.headers {
+        // The parse_http crate is weird, it fills the array with empty headers
+        // if a partial request is parsed.
+        if header.name.is_empty() {
+            break;
+        }
+        let value = str::from_utf8(header.value)?;
+        let header_name = HeaderName::from_str(header.name)?;
+        let header_value = HeaderValue::from_str(value)?;
+        map.insert(header_name, header_value);
+    }
+
+    Ok(Ok(HitmanRequest {
+        headers: map,
+        url,
+        method,
+        body,
+    }))
+}
+
+pub fn substitute_graphql(
+    vars: &[String],
+    env: &Table,
+) -> SubstituteResult<Vec<String>> {
+    let mut output = vec![];
+
+    for line in vars {
+        output.push(find_replacement(line, env)?);
+    }
+
+    Ok(output)
+}
 
 pub fn substitute(input: &str, env: &Table) -> SubstituteResult<String> {
     let mut output = String::new();
@@ -75,7 +177,7 @@ fn valid_character(c: &char) -> bool {
     c.is_ascii_alphabetic() || c.is_ascii_digit() || *c == '_'
 }
 
-fn find_replacement(
+pub fn find_replacement(
     placeholder: &str,
     env: &Table,
 ) -> SubstituteResult<String> {

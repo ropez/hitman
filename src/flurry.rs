@@ -3,13 +3,12 @@ use futures::future::join_all;
 use log::warn;
 use spinoff::{spinners, Color, Spinner, Streams};
 
-use std::fs::read_to_string;
 use std::path::Path;
 use std::time::Duration;
 use tokio::spawn;
 use toml::Table;
 
-use crate::prompt::{get_interaction, substitute_interactive};
+use crate::prompt::{get_interaction, prepare_request_interactive};
 use crate::request::{build_client, do_request};
 use crate::util::{split_work, IterExt};
 
@@ -31,11 +30,8 @@ pub async fn flurry_attack(
     warn!("# Sending {flurry_size} requests on {connections} parallel connections...");
 
     let interaction = get_interaction();
-    let buf = substitute_interactive(
-        &read_to_string(file_path)?,
-        env,
-        interaction.as_ref(),
-    )?;
+    let req =
+        prepare_request_interactive(file_path, env, interaction.as_ref())?;
 
     let t = std::time::Instant::now();
     let mut spinner = Spinner::new_with_stream(
@@ -49,12 +45,12 @@ pub async fn flurry_attack(
     // It might make it more efficient, if we let each task run a series
     // of requests using a single connection.
     let handles = split_work(flurry_size, connections).map(|size| {
-        let buf = buf.clone();
         let client = client.clone();
+        let req = req.clone();
         spawn(async move {
             let mut results = Vec::new();
             for _ in 0..size {
-                let res = match do_request(&client, &buf).await {
+                let res = match do_request(&client, &req).await {
                     Ok((res, elapsed)) => {
                         Some((res.status().as_u16(), elapsed))
                     }

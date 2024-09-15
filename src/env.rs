@@ -244,7 +244,13 @@ pub fn find_available_requests(cwd: &Path) -> Result<Vec<PathBuf>> {
         .filter(|e| {
             e.file_name()
                 .to_str()
-                .map(|s| s.ends_with(".http"))
+                .map(|s| {
+                    // Ignore special _graphql.http file
+                    s != "_graphql.http"
+                        && (s.ends_with(".http")
+                            || s.ends_with(".gql")
+                            || s.ends_with(".graphql"))
+                })
                 .unwrap_or(false)
         })
         .map(|p| {
@@ -275,7 +281,7 @@ mod tests {
 
     #[test]
     fn test_find_environments() {
-        let config = toml! {
+        let config: PathBuf = toml! {
         r#"
             global = "foo"
 
