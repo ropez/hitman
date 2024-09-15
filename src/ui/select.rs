@@ -267,7 +267,7 @@ where
         let inner = block.inner(layout[1]);
         frame.render_widget(Paragraph::new(text).block(block), layout[1]);
 
-        frame.set_cursor(inner.x + cur as u16, inner.y);
+        frame.set_cursor_position((inner.x + cur as u16, inner.y));
     }
 }
 

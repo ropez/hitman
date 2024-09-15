@@ -131,7 +131,7 @@ impl App {
             root_dir,
             target,
             request_selector: RequestSelector::new(),
-            output_view: OutputView::default(),
+            output_view: OutputView::new(),
             state: AppState::Idle,
             error: None,
             should_quit: false,
@@ -151,7 +151,7 @@ impl App {
         while !self.should_quit {
             screen
                 .terminal()
-                .draw(|frame| self.render_ui(frame, frame.size()))?;
+                .draw(|frame| self.render_ui(frame, frame.area()))?;
 
             let mut pending_intent = self.process_events().await?;
             while let Some(intent) = pending_intent {
@@ -584,7 +584,7 @@ impl App {
     }
 
     fn render_status(&mut self, frame: &mut Frame, area: Rect) {
-        let area = area.inner(&Margin::new(1, 0));
+        let area = area.inner(Margin::new(1, 0));
 
         let layout = Layout::default()
             .direction(Direction::Horizontal)
@@ -616,7 +616,7 @@ impl App {
     }
 
     fn render_popup(&mut self, frame: &mut Frame) {
-        let area = frame.size();
+        let area = frame.area();
         match &mut self.state {
             AppState::PendingValue { component, .. } => {
                 let inner_area = centered(area, 48, 30);
@@ -634,7 +634,7 @@ impl App {
             }
 
             AppState::RunningRequest { progress, .. } => {
-                progress.render_ui(frame, frame.size());
+                progress.render_ui(frame, frame.area());
             }
 
             _ => (),

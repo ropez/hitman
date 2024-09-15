@@ -71,10 +71,10 @@ impl Component for SimplePrompt {
             area,
         );
 
-        frame.set_cursor(
+        frame.set_cursor_position((
             inner.x + cur + self.input.visual_cursor() as u16,
             inner.y,
-        );
+        ));
     }
 }
 
