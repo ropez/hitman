@@ -4,10 +4,17 @@ use crossterm::event::Event;
 use ratatui::{
     layout::Rect,
     style::{Style, Stylize},
-    text::{Line, Text},
+    text::{Line, Span, Text},
     widgets::{Block, Borders, Paragraph, Wrap},
     Frame,
 };
+use syntect::{
+    easy::HighlightLines,
+    highlighting::{Color, Style as HlStyle, Theme, ThemeSet},
+    parsing::SyntaxSet,
+    util::LinesWithEndings,
+};
+use syntect_tui::into_span;
 
 use super::{
     keymap::{mapkey, KeyMapping},
@@ -53,21 +60,35 @@ pub enum Content {
     Request(HttpRequestInfo),
 }
 
-#[derive(Default)]
 pub struct OutputView {
     content: Content,
     scroll: (u16, u16),
     noheaders: bool,
     nowrap: bool,
+    highlighter: SyntaxHighlighter,
 }
 
 impl OutputView {
+    pub fn new() -> Self {
+        Self {
+            content: Content::Empty,
+            scroll: (0, 0),
+            noheaders: false,
+            nowrap: false,
+            highlighter: SyntaxHighlighter::new(),
+        }
+    }
+
     pub fn show_preview(&mut self, text: String) {
         self.scroll = (0, 0);
         self.content = Content::Preview(text);
     }
 
     pub fn show_request(&mut self, info: HttpRequestInfo) {
+        if let RequestStatus::Complete { response, .. } = &info.status {
+            self.highlighter.update("json", &response.body);
+        }
+
         self.scroll = (0, 0);
         self.content = Content::Request(info);
     }
@@ -78,15 +99,15 @@ impl OutputView {
     }
 
     pub fn scroll_up(&mut self) {
-        if self.scroll.0 <= 5 {
+        if self.scroll.0 <= 15 {
             self.scroll.0 = 0;
         } else {
-            self.scroll.0 -= 5;
+            self.scroll.0 -= 15;
         }
     }
 
     pub fn scroll_down(&mut self) {
-        self.scroll.0 += 5;
+        self.scroll.0 += 15;
     }
 
     fn title(&self) -> &'static str {
@@ -109,10 +130,8 @@ impl OutputView {
 
         s
     }
-}
 
-impl Component for OutputView {
-    fn render_ui(&mut self, frame: &mut Frame, area: Rect) {
+    fn make_lines(&self) -> Vec<Line> {
         let mut lines: Vec<Line> = Vec::new();
 
         match &self.content {
@@ -142,12 +161,18 @@ impl Component for OutputView {
                             .map(|line| Line::styled(line, green));
                         lines.extend(res_lines);
 
-                        let normal = Style::new();
-                        let res_body_lines = response
-                            .body
-                            .lines()
-                            .map(|line| Line::styled(line, normal));
-                        lines.extend(res_body_lines);
+                        if let Some(highlighted_lines) =
+                            self.highlighter.lines()
+                        {
+                            lines.extend(highlighted_lines);
+                        } else {
+                            lines.extend(
+                                response
+                                    .body
+                                    .lines()
+                                    .map(|line| Line::from(line)),
+                            );
+                        }
                     }
                     RequestStatus::Failed { error } => {
                         let yellow = Style::new().yellow();
@@ -166,7 +191,12 @@ impl Component for OutputView {
                 lines.extend(req_lines);
             }
         }
+        lines
+    }
+}
 
+impl Component for OutputView {
+    fn render_ui(&mut self, frame: &mut Frame, area: Rect) {
         let title_bottom = if let Content::Request(info) = &self.content {
             if let RequestStatus::Complete { elapsed, .. } = &info.status {
                 format!("Elapsed: {:.2?}", elapsed)
@@ -177,6 +207,7 @@ impl Component for OutputView {
             String::new()
         };
 
+        let lines = self.make_lines();
         let para = Paragraph::new(Text::from(lines));
 
         let para = if self.nowrap {
@@ -219,5 +250,77 @@ impl InteractiveComponent for OutputView {
         }
 
         None
+    }
+}
+
+struct SyntaxHighlighter {
+    syntax_set: SyntaxSet,
+    theme: Theme,
+
+    cache: Option<Vec<Vec<(HlStyle, String)>>>,
+}
+
+impl SyntaxHighlighter {
+    pub fn new() -> Self {
+        let ps = SyntaxSet::load_defaults_newlines();
+
+        // Load built-in theme
+        let ts = ThemeSet::load_defaults();
+        let mut theme = ts.themes["Solarized (dark)"].clone();
+
+        // Set theme background to transparent
+        let mut bg = theme.settings.background.unwrap_or(Color::BLACK);
+        bg.a = 0;
+        theme.settings.background = Some(bg);
+
+        Self {
+            syntax_set: ps,
+            theme,
+            cache: None,
+        }
+    }
+
+    fn lines(&self) -> Option<Vec<Line>> {
+        match &self.cache {
+            Some(lines) => Some(
+                lines
+                    .iter()
+                    .map(|line| {
+                        let line_spans: Vec<Span> = line
+                            .iter()
+                            .filter_map(|seg| {
+                                into_span((seg.0, seg.1.as_str())).ok()
+                            })
+                            .collect();
+
+                        Line::from(line_spans)
+                    })
+                    .collect(),
+            ),
+            None => None,
+        }
+    }
+
+    fn update(&mut self, extension: &str, text: &str) {
+        let Some(syntax) = self.syntax_set.find_syntax_by_extension(extension)
+        else {
+            return;
+        };
+
+        let mut ctx = HighlightLines::new(syntax, &self.theme);
+
+        let lines: Vec<_> = LinesWithEndings::from(text)
+            .map(|line| {
+                Ok(ctx
+                    .highlight_line(line, &self.syntax_set)?
+                    .into_iter()
+                    // Map from &str to String, so that we can store it
+                    .map(|(style, s)| (style, s.to_string()))
+                    .collect())
+            })
+            .filter_map(|o: Result<Vec<_>, syntect::Error>| o.ok())
+            .collect();
+
+        self.cache.replace(lines);
     }
 }

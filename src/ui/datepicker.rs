@@ -112,7 +112,7 @@ impl Component for DatePicker {
         frame.render_widget(Paragraph::new(weekdays), inner_layout[2]);
         frame.render_widget(
             Paragraph::new(calendar),
-            inner_layout[3].inner(&Margin::new(1, 0)),
+            inner_layout[3].inner(Margin::new(1, 0)),
         );
 
         let current = Line::from(format!("{}", date))
