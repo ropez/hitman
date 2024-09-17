@@ -4,7 +4,6 @@ use reqwest::{
     header::{HeaderMap, HeaderName, HeaderValue},
     Method, Url,
 };
-use serde_json::json;
 use std::{
     collections::HashMap,
     fs::read_to_string,
@@ -14,7 +13,7 @@ use std::{
 use thiserror::Error;
 use toml::{Table, Value};
 
-use crate::request::{find_args, resolve_http_file, HitmanRequest};
+use crate::request::{find_args, resolve_http_file, HitmanBody, HitmanRequest};
 
 #[derive(Error, Debug, Clone)]
 pub enum SubstituteError {
@@ -75,7 +74,11 @@ pub fn prepare_request(
         };
 
         if vars.is_empty() {
-            Some(json!({gql.operation.to_string(): body}).to_string())
+            Some(HitmanBody::GraphQL {
+                operation: gql.operation,
+                body,
+                variables: None,
+            })
         } else {
             let mut map: HashMap<String, String> = HashMap::new();
 
@@ -84,12 +87,18 @@ pub fn prepare_request(
             }
 
             let variables = serde_json::to_value(map)?;
-            Some(json!({gql.operation.to_string(): body, "variables": variables})
-                .to_string())
+
+            Some(HitmanBody::GraphQL {
+                operation: gql.operation,
+                body,
+                variables: Some(serde_json::to_string_pretty(&variables)?),
+            })
         }
     } else {
         match parse_result {
-            Complete(offset) => Some(buf[offset..].to_string()),
+            Complete(offset) => Some(HitmanBody::REST {
+                body: buf[offset..].to_string(),
+            }),
             Partial => None,
         }
     };

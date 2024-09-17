@@ -139,14 +139,10 @@ impl OutputView {
             Content::Empty => {}
             Content::Request(info) => {
                 let blue = Style::new().blue();
-                // TODO: Figure this out
-                // let req_lines = info
-                //     .request
-                //     .0
-                //     .lines()
-                //     .take(if self.noheaders { 1 } else { usize::MAX })
-                //     .map(|line| Line::styled(format!("> {line}"), blue));
-                // lines.extend(req_lines);
+
+                for line in info.request.0.to_string().lines() {
+                    lines.push(Line::styled(format!("> {}", line), blue));
+                }
 
                 if !self.noheaders {
                     lines.push(Line::default());
