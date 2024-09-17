@@ -114,7 +114,7 @@ pub fn prepare_request(
     }))
 }
 
-pub fn substitute_graphql(
+fn substitute_graphql(
     vars: &[String],
     env: &Table,
 ) -> SubstituteResult<Vec<String>> {
@@ -177,7 +177,7 @@ fn valid_character(c: &char) -> bool {
     c.is_ascii_alphabetic() || c.is_ascii_digit() || *c == '_'
 }
 
-pub fn find_replacement(
+fn find_replacement(
     placeholder: &str,
     env: &Table,
 ) -> SubstituteResult<String> {
