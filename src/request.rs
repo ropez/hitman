@@ -213,7 +213,6 @@ pub fn resolve_http_file(path: &Path) -> Result<PathBuf> {
         return Ok(path.to_path_buf());
     };
 
-    // &resolve_http_file(file_path)?.context("Couldn't find _graphql.http")?
     let mut dir = path.parent().context("No parent")?.to_path_buf();
     loop {
         let file = dir.join("_graphql.http");
