@@ -30,7 +30,7 @@ pub enum HitmanBody {
     },
     GraphQL {
         body: String,
-        variables: Option<String>,
+        variables: Option<serde_json::Value>,
     },
 }
 
@@ -39,7 +39,12 @@ impl Display for HitmanBody {
         match self {
             HitmanBody::REST { body } => write!(f, "{}", body),
             HitmanBody::GraphQL { body, variables } => match variables {
-                Some(v) => write!(f, "{}\n{}", body, v),
+                Some(v) => {
+                    let vars = serde_json::to_string_pretty(&v)
+                        .unwrap_or_else(|_| v.to_string());
+
+                    write!(f, "{}\n{}", body, vars)
+                }
                 None => write!(f, "{}", body),
             },
         }
@@ -153,6 +158,7 @@ pub async fn do_request(
     let mut builder = client.request(req.method.clone(), req.url.clone());
     builder = builder.headers(req.headers.clone());
     if let Some(ref body) = req.body {
+        println!("body: {:?}", body.clone().to_body());
         builder = builder.body(body.clone().to_body());
     }
 

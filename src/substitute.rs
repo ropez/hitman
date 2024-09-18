@@ -89,7 +89,7 @@ pub fn prepare_request(
 
             Some(HitmanBody::GraphQL {
                 body,
-                variables: Some(serde_json::to_string_pretty(&variables)?),
+                variables: Some(variables),
             })
         }
     } else {
