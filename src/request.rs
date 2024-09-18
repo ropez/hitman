@@ -158,7 +158,6 @@ pub async fn do_request(
     let mut builder = client.request(req.method.clone(), req.url.clone());
     builder = builder.headers(req.headers.clone());
     if let Some(ref body) = req.body {
-        println!("body: {:?}", body.clone().to_body());
         builder = builder.body(body.clone().to_body());
     }
 
