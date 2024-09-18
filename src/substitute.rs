@@ -67,29 +67,27 @@ pub fn prepare_request(
 
     let body = if extension == "gql" || extension == "graphql" {
         let body = read_to_string(path)?;
-        let gql = find_args(path)?;
-        let vars = match substitute_graphql(&gql.args, env) {
+        let args = find_args(path)?;
+        let vars = match substitute_graphql(&args, env) {
             Ok(vars) => vars,
             Err(e) => return Ok(Err(e)),
         };
 
         if vars.is_empty() {
             Some(HitmanBody::GraphQL {
-                operation: gql.operation,
                 body,
                 variables: None,
             })
         } else {
             let mut map: HashMap<String, String> = HashMap::new();
 
-            for (key, value) in gql.args.into_iter().zip(vars.into_iter()) {
+            for (key, value) in args.into_iter().zip(vars.into_iter()) {
                 map.insert(key, value);
             }
 
             let variables = serde_json::to_value(map)?;
 
             Some(HitmanBody::GraphQL {
-                operation: gql.operation,
                 body,
                 variables: Some(serde_json::to_string_pretty(&variables)?),
             })
