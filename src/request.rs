@@ -29,7 +29,6 @@ pub enum HitmanBody {
         body: String,
     },
     GraphQL {
-        operation: GraphQLOperation,
         body: String,
         variables: Option<String>,
     },
@@ -39,11 +38,7 @@ impl Display for HitmanBody {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             HitmanBody::REST { body } => write!(f, "{}", body),
-            HitmanBody::GraphQL {
-                operation: _,
-                body,
-                variables,
-            } => match variables {
+            HitmanBody::GraphQL { body, variables } => match variables {
                 Some(v) => write!(f, "{}\n{}", body, v),
                 None => write!(f, "{}", body),
             },
@@ -55,14 +50,9 @@ impl HitmanBody {
     pub fn to_body(self) -> String {
         match self {
             HitmanBody::REST { body } => body,
-            HitmanBody::GraphQL {
-                operation,
-                body,
-                variables,
-            } => match variables {
-                Some(v) => json!({operation.to_string(): body, "variables": v})
-                    .to_string(),
-                None => json!({operation.to_string(): body}).to_string(),
+            HitmanBody::GraphQL { body, variables } => match variables {
+                Some(v) => json!({"query": body, "variables": v}).to_string(),
+                None => json!({"query": body}).to_string(),
             },
         }
     }
@@ -247,7 +237,7 @@ pub struct GraphQLRequest {
     pub args: Vec<String>,
 }
 
-pub fn find_args<P>(path: P) -> Result<GraphQLRequest>
+pub fn find_args<P>(path: P) -> Result<Vec<String>>
 where
     P: AsRef<Path>,
 {
@@ -260,14 +250,10 @@ where
 
     let args = match doc.definitions[0] {
         Definition::Operation(ref op) => match op {
-            OperationDefinition::Query(q) => GraphQLRequest {
-                operation: GraphQLOperation::Query,
-                args: variables(&q.variable_definitions),
-            },
-            OperationDefinition::Mutation(m) => GraphQLRequest {
-                operation: GraphQLOperation::Mutation,
-                args: variables(&m.variable_definitions),
-            },
+            OperationDefinition::Query(q) => variables(&q.variable_definitions),
+            OperationDefinition::Mutation(m) => {
+                variables(&m.variable_definitions)
+            }
             OperationDefinition::SelectionSet(_) => bail!("Not supported"),
             OperationDefinition::Subscription(_) => bail!("Not supported"),
         },
