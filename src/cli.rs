@@ -46,6 +46,17 @@ pub struct Args {
     #[arg(short, long, conflicts_with = "repeat", requires = "name")]
     pub flurry: Option<i32>,
 
+    /// Repeat the same request indefinely, with the given number of seconds delay between hits.
+    #[arg(
+        short,
+        long,
+        conflicts_with = "repeat",
+        conflicts_with = "flurry",
+        conflicts_with = "watch",
+        requires = "name"
+    )]
+    pub monitor: Option<i32>,
+
     /// Number concurrent connections used in a flurry attack.
     #[arg(short, long, requires = "flurry")]
     pub connections: Option<i32>,

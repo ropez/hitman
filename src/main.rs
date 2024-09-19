@@ -10,6 +10,7 @@ use hitman::env::{
     find_available_requests, find_root_dir, load_env, select_env, watch_list,
 };
 use hitman::flurry::flurry_attack;
+use hitman::monitor::monitor;
 use hitman::prompt::{fuzzy_match, set_interactive_mode};
 use hitman::request::make_request;
 
@@ -23,7 +24,11 @@ mod watcher;
 async fn main() -> Result<()> {
     let args = cli::parse_args();
 
-    logging::init(args.verbose, args.quiet, args.flurry.is_some())?;
+    logging::init(
+        args.verbose,
+        args.quiet,
+        args.flurry.is_some() || args.monitor.is_some(),
+    )?;
 
     set_interactive_mode(!(args.non_interactive || args.watch));
 
@@ -48,6 +53,9 @@ async fn main() -> Result<()> {
                 &env,
             )
             .await
+        } else if let Some(delay_seconds) = args.monitor {
+            let env = load_env(&root_dir, &file_path, &args.options)?;
+            monitor(&file_path, delay_seconds, &env).await
         } else {
             let res = run_once(&root_dir, &file_path, &args.options).await;
 
