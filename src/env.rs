@@ -3,11 +3,11 @@ use inquire::Select;
 use log::warn;
 use reqwest::cookie::CookieStore;
 use reqwest::Url;
-use walkdir::WalkDir;
 use std::env::current_dir;
 use std::fs::{self, read_to_string};
 use std::path::{Path, PathBuf};
 use toml::{Table as TomlTable, Value};
+use walkdir::WalkDir;
 
 use crate::prompt::fuzzy_match;
 
@@ -47,7 +47,9 @@ impl CookieStore for HitmanCookieJar {
                 let headers = arr
                     .iter()
                     .filter_map(|it| cookie::Cookie::parse(it.as_str()?).ok())
-                    .map(|cookie| format!("{}={}", cookie.name(), cookie.value()))
+                    .map(|cookie| {
+                        format!("{}={}", cookie.name(), cookie.value())
+                    })
                     .collect::<Vec<_>>()
                     .join("; ");
 
@@ -242,13 +244,20 @@ pub fn find_available_requests(cwd: &Path) -> Result<Vec<PathBuf>> {
         .filter(|e| {
             e.file_name()
                 .to_str()
-                .map(|s| s.ends_with(".http"))
+                .map(|s| {
+                    // Ignore special _graphql.http file
+                    s != "_graphql.http"
+                        && (s.ends_with(".http")
+                            || s.ends_with(".gql")
+                            || s.ends_with(".graphql"))
+                })
                 .unwrap_or(false)
         })
         .map(|p| {
             // Convert to relative path, based on depth
             let components: Vec<_> = p.path().components().collect();
-            let relative_components: Vec<_> = components[(components.len() - p.depth())..]
+            let relative_components: Vec<_> = components
+                [(components.len() - p.depth())..]
                 .iter()
                 .map(|c| c.as_os_str())
                 .collect();
@@ -259,7 +268,6 @@ pub fn find_available_requests(cwd: &Path) -> Result<Vec<PathBuf>> {
 
     Ok(files)
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -273,7 +281,7 @@ mod tests {
 
     #[test]
     fn test_find_environments() {
-        let config = toml! {
+        let config: PathBuf = toml! {
         r#"
             global = "foo"
 

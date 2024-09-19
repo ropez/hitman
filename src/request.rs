@@ -1,13 +1,16 @@
-use anyhow::{Context, Result};
-use httparse::Status::*;
+use anyhow::{anyhow, bail, Context, Result};
+use graphql_parser::query::{
+    Definition, OperationDefinition, VariableDefinition,
+};
+
 use log::{info, log_enabled, warn, Level};
-use reqwest::{Client, Method, Response, Url};
-use serde_json::Value;
-use spinoff::{Spinner, spinners, Color, Streams};
+use reqwest::{header::HeaderMap, Client, Method, Response, Url};
+use serde_json::{json, Value};
+use spinoff::{spinners, Color, Spinner, Streams};
 use std::{
-    fs::read_to_string,
-    path::Path,
-    str::{self, FromStr},
+    fmt::Display,
+    path::{Path, PathBuf},
+    str::{self},
     sync::Arc,
     time::Duration,
 };
@@ -16,11 +19,82 @@ use toml::Table;
 use crate::{
     env::{update_data, HitmanCookieJar},
     extract::extract_variables,
-    prompt::{get_interaction, substitute_interactive},
+    prompt::{get_interaction, prepare_request_interactive},
     util::truncate,
 };
 
-static USER_AGENT: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"),);
+#[derive(Clone)]
+pub enum HitmanBody {
+    REST {
+        body: String,
+    },
+    GraphQL {
+        body: String,
+        variables: Option<serde_json::Value>,
+    },
+}
+
+impl Display for HitmanBody {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            HitmanBody::REST { body } => write!(f, "{}", body),
+            HitmanBody::GraphQL { body, variables } => match variables {
+                Some(v) => {
+                    let vars = serde_json::to_string_pretty(&v)
+                        .unwrap_or_else(|_| v.to_string());
+
+                    write!(f, "{}\n{}", body, vars)
+                }
+                None => write!(f, "{}", body),
+            },
+        }
+    }
+}
+
+impl HitmanBody {
+    pub fn to_body(self) -> String {
+        match self {
+            HitmanBody::REST { body } => body,
+            HitmanBody::GraphQL { body, variables } => match variables {
+                Some(v) => json!({"query": body, "variables": v}).to_string(),
+                None => json!({"query": body}).to_string(),
+            },
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct HitmanRequest {
+    pub headers: HeaderMap,
+    pub url: Url,
+    pub method: Method,
+    pub body: Option<HitmanBody>,
+}
+
+impl Display for HitmanRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "{} {}", self.method.as_str(), self.url.as_str())?;
+        for (key, val) in self.headers.iter() {
+            writeln!(
+                f,
+                "{}: {}",
+                key.as_str(),
+                val.to_str().unwrap_or("unknown value")
+            )?;
+        }
+
+        if let Some(ref body) = self.body {
+            writeln!(f)?;
+            for line in body.to_string().lines() {
+                writeln!(f, "{}", line)?;
+            }
+        }
+        write!(f, "")
+    }
+}
+
+static USER_AGENT: &str =
+    concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"),);
 
 pub fn build_client() -> Result<Client> {
     let client = Client::builder()
@@ -35,14 +109,19 @@ pub async fn make_request(file_path: &Path, env: &Table) -> Result<()> {
 
     let interaction = get_interaction();
 
-    let buf = substitute_interactive(&read_to_string(file_path)?, env, interaction.as_ref())?;
+    let req =
+        prepare_request_interactive(file_path, env, interaction.as_ref())?;
 
     clear_screen();
-    print_request(&buf);
+    print_request(&req);
 
-    let mut spinner =
-        Spinner::new_with_stream(spinners::BouncingBar, "", Color::Yellow, Streams::Stderr);
-    let (response, elapsed) = do_request(&client, &buf).await?;
+    let mut spinner = Spinner::new_with_stream(
+        spinners::BouncingBar,
+        "",
+        Color::Yellow,
+        Streams::Stderr,
+    );
+    let (response, elapsed) = do_request(&client, &req).await?;
     spinner.stop();
 
     print_response(&response)?;
@@ -72,34 +151,14 @@ fn clear_screen() {
     }
 }
 
-pub async fn do_request(client: &Client, buf: &str) -> Result<(Response, Duration)> {
-    let mut headers = [httparse::EMPTY_HEADER; 64];
-    let mut req = httparse::Request::new(&mut headers);
-
-    let parse_result = req.parse(buf.as_bytes()).context("Invalid input: malformed request")?;
-
-    let method = req.method.context("Invalid input: HTTP method not found")?;
-    let url = req.path.context("Invalid input: URL not found")?;
-
-    let method = Method::from_str(method)?;
-    let url = Url::parse(url)?;
-
-    let mut builder = client.request(method, url);
-
-    if let Complete(offset) = parse_result {
-        let body = &buf[offset..];
-        builder = builder.body(body.to_owned());
-    }
-
-    for header in req.headers {
-        // The parse_http crate is weird, it fills the array with empty headers
-        // if a partial request is parsed.
-        if header.name.is_empty() {
-            break;
-        }
-        let value = str::from_utf8(header.value)?;
-
-        builder = builder.header(String::from(header.name), value);
+pub async fn do_request(
+    client: &Client,
+    req: &HitmanRequest,
+) -> Result<(Response, Duration)> {
+    let mut builder = client.request(req.method.clone(), req.url.clone());
+    builder = builder.headers(req.headers.clone());
+    if let Some(ref body) = req.body {
+        builder = builder.body(body.clone().to_body());
     }
 
     let t = std::time::Instant::now();
@@ -110,13 +169,11 @@ pub async fn do_request(client: &Client, buf: &str) -> Result<(Response, Duratio
     Ok((response, elapsed))
 }
 
-fn print_request(buf: &str) {
+fn print_request(req: &HitmanRequest) {
     if log_enabled!(Level::Info) {
-        for line in buf.lines() {
+        for line in req.to_string().lines() {
             info!("> {}", truncate(line));
         }
-
-        info!("");
     }
 }
 
@@ -142,4 +199,71 @@ fn print_response(res: &Response) -> Result<()> {
     }
 
     Ok(())
+}
+
+// TODO: This is very similar to `find_root_dir`
+pub fn resolve_http_file(path: &Path) -> Result<PathBuf> {
+    let ext = path.extension().context("Couldn't find extension")?;
+    if ext != "gql" && ext != "graphql" {
+        return Ok(path.to_path_buf());
+    };
+
+    let mut dir = path.parent().context("No parent")?.to_path_buf();
+    loop {
+        let file = dir.join("_graphql.http");
+        if file.exists() {
+            return Ok(file);
+        }
+        if let Some(parent) = dir.parent() {
+            dir = parent.to_path_buf();
+        } else {
+            return Err(anyhow!("Couldn't find _graphql.http"));
+        }
+    }
+}
+
+#[derive(Clone)]
+pub enum GraphQLOperation {
+    Query,
+    Mutation,
+}
+
+impl Display for GraphQLOperation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            GraphQLOperation::Query => write!(f, "query"),
+            GraphQLOperation::Mutation => write!(f, "mutation"),
+        }
+    }
+}
+
+pub struct GraphQLRequest {
+    pub operation: GraphQLOperation,
+    pub args: Vec<String>,
+}
+
+pub fn find_args<P>(path: P) -> Result<Vec<String>>
+where
+    P: AsRef<Path>,
+{
+    let file = std::fs::read_to_string(path)?;
+    let doc = graphql_parser::parse_query::<String>(&file)?;
+
+    let variables = |vars: &[VariableDefinition<String>]| {
+        vars.iter().map(|d| d.name.clone()).collect::<Vec<_>>()
+    };
+
+    let args = match doc.definitions[0] {
+        Definition::Operation(ref op) => match op {
+            OperationDefinition::Query(q) => variables(&q.variable_definitions),
+            OperationDefinition::Mutation(m) => {
+                variables(&m.variable_definitions)
+            }
+            OperationDefinition::SelectionSet(_) => bail!("Not supported"),
+            OperationDefinition::Subscription(_) => bail!("Not supported"),
+        },
+        Definition::Fragment(_) => bail!("Not supported"),
+    };
+
+    Ok(args)
 }

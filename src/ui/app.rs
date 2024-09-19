@@ -25,8 +25,8 @@ use hitman::{
         load_env, set_target, update_data,
     },
     extract::extract_variables,
-    request::{build_client, do_request},
-    substitute::{substitute, SubstituteError},
+    request::{build_client, do_request, resolve_http_file, HitmanRequest},
+    substitute::{prepare_request, SubstituteError},
 };
 
 use crate::ui::{
@@ -105,7 +105,7 @@ pub enum Intent {
     },
     SendRequest {
         file_path: String,
-        prepared_request: String,
+        prepared_request: HitmanRequest,
     },
     ShowResult(HttpRequestInfo),
     SelectTarget,
@@ -190,7 +190,7 @@ impl App {
                 return Ok(Some(PreviewRequest(selected)));
             }
             PrepareRequest(file_path, options) => {
-                return Ok(self.try_request(file_path, options)?);
+                return self.try_request(file_path, options);
             }
             PreviewRequest(file_path) => {
                 self.preview_request(file_path)?;
@@ -340,9 +340,12 @@ impl App {
         let root_dir = self.root_dir.clone();
 
         let path = PathBuf::from(file_path.clone());
-        let env = load_env(&root_dir, &path, &options)?;
 
-        let intent = match substitute(&read_to_string(path.clone())?, &env) {
+        let http_file = resolve_http_file(&path)?;
+
+        let env = load_env(&root_dir, &http_file, &options)?;
+
+        let intent = match prepare_request(&path, &env)? {
             Ok(prepared_request) => Some(Intent::SendRequest {
                 file_path,
                 prepared_request,
@@ -392,13 +395,13 @@ impl App {
     fn send_request(
         &mut self,
         file_path: String,
-        prepared_request: String,
+        prepared_request: HitmanRequest,
     ) -> Result<()> {
         let root_dir = self.root_dir.clone();
         let file_path = PathBuf::from(file_path);
 
         let handle = tokio::spawn(async move {
-            make_request(&prepared_request, &root_dir, &file_path).await
+            make_request(prepared_request, &root_dir, &file_path).await
         });
 
         let state = AppState::RunningRequest {
@@ -643,12 +646,12 @@ impl App {
 }
 
 async fn make_request(
-    buf: &str,
+    req: HitmanRequest,
     root_dir: &Path,
     file_path: &Path,
 ) -> HttpRequestInfo {
-    let request = HttpRequestMessage(buf.into());
-    let status = match do_make_request(buf, root_dir, file_path).await {
+    let request = HttpRequestMessage(req.clone());
+    let status = match do_make_request(req, root_dir, file_path).await {
         Ok((response, elapsed)) => {
             RequestStatus::Complete { response, elapsed }
         }
@@ -662,13 +665,15 @@ async fn make_request(
 
 // FIXME: DRY request.rs
 async fn do_make_request(
-    buf: &str,
+    req: HitmanRequest,
     root_dir: &Path,
     file_path: &Path,
 ) -> Result<(HttpMessage, Duration)> {
     let client = build_client()?;
+    let options = vec![];
+    let env = load_env(root_dir, file_path, &options)?;
 
-    let (res, elapsed) = do_request(&client, buf).await?;
+    let (res, elapsed) = do_request(&client, &req).await?;
 
     let mut response = HttpMessage::default();
     writeln!(
@@ -685,8 +690,6 @@ async fn do_make_request(
     if let Ok(json) = res.json::<serde_json::Value>().await {
         writeln!(response.body, "{}", serde_json::to_string_pretty(&json)?)?;
 
-        let options = vec![];
-        let env = load_env(root_dir, file_path, &options)?;
         let vars = extract_variables(&json, &env)?;
         update_data(&vars)?;
     }
