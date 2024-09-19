@@ -1,9 +1,12 @@
 use anyhow::{bail, Result};
 use inquire::{list_option::ListOption, DateSelect, Select, Text};
-use std::env;
+use std::{env, path::Path};
 use toml::{Table, Value};
 
-use crate::substitute::{substitute, SubstituteError};
+use crate::{
+    request::HitmanRequest,
+    substitute::{prepare_request, substitute, SubstituteError},
+};
 
 fn set_boolean(name: &str, value: bool) {
     env::set_var(name, if value { "y" } else { "n" });
@@ -56,7 +59,43 @@ pub trait UserInteraction {
     fn select(&self, key: &str, values: &[Value]) -> Result<String>;
 }
 
-pub fn substitute_interactive<I>(input: &str, env: &Table, interaction: &I) -> Result<String>
+pub fn prepare_request_interactive<I>(
+    path: &Path,
+    env: &Table,
+    interaction: &I,
+) -> Result<HitmanRequest>
+where
+    I: UserInteraction + ?Sized,
+{
+    match prepare_request(path, env)? {
+        Ok(res) => Ok(res),
+        Err(err) => {
+            let (key, value) = match err {
+                SubstituteError::ValueNotFound { key, fallback } => {
+                    let value =
+                        interaction.prompt(&key, fallback.as_deref())?;
+                    (key, value)
+                }
+                SubstituteError::MultipleValuesFound { key, values } => {
+                    let value = interaction.select(&key, &values)?;
+                    (key, value)
+                }
+                e => bail!(e),
+            };
+
+            let mut env = env.clone();
+            env.insert(key, Value::String(value));
+
+            prepare_request_interactive(path, &env, interaction)
+        }
+    }
+}
+
+pub fn substitute_interactive<I>(
+    input: &str,
+    env: &Table,
+    interaction: &I,
+) -> Result<String>
 where
     I: UserInteraction + ?Sized,
 {
@@ -140,7 +179,8 @@ fn prompt_user(key: &str, fallback: Option<&str>) -> Result<String> {
 
 fn prompt_for_date(key: &str) -> Result<Option<String>> {
     let msg = format!("Select a date for {}", key);
-    let formatter = |date: chrono::NaiveDate| date.format("%Y-%m-%d").to_string();
+    let formatter =
+        |date: chrono::NaiveDate| date.format("%Y-%m-%d").to_string();
 
     let res = DateSelect::new(&msg)
         .with_week_start(chrono::Weekday::Mon)
@@ -169,10 +209,11 @@ fn select_replacement(key: &str, values: &[Value]) -> Result<String> {
         })
         .collect();
 
-    let selected = Select::new(&format!("Select value for {}", key), list_options.clone())
-        .with_filter(&|filter, _, value, _| fuzzy_match(filter, value))
-        .with_page_size(15)
-        .prompt()?;
+    let selected =
+        Select::new(&format!("Select value for {}", key), list_options.clone())
+            .with_filter(&|filter, _, value, _| fuzzy_match(filter, value))
+            .with_page_size(15)
+            .prompt()?;
 
     match &values[selected.index] {
         Value::Table(t) => match t.get("value") {
@@ -224,7 +265,8 @@ mod tests {
     }
 
     #[test]
-    fn returns_true_if_value_contains_all_letters_in_filter_in_the_same_order() {
+    fn returns_true_if_value_contains_all_letters_in_filter_in_the_same_order()
+    {
         assert!(fuzzy_match("abc", "uaaxbycz"));
     }
 }

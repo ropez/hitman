@@ -5,18 +5,18 @@ use ratatui::{
 };
 
 pub mod app;
+pub mod datepicker;
 pub mod keymap;
 pub mod output;
 pub mod progress;
 pub mod prompt;
 pub mod select;
-pub mod datepicker;
 
 pub trait Component {
     fn render_ui(&mut self, frame: &mut Frame, area: Rect);
 }
 
-pub trait InteractiveComponent : Component {
+pub trait InteractiveComponent: Component {
     type Intent;
 
     fn handle_event(&mut self, event: &Event) -> Option<Self::Intent>;
@@ -27,7 +27,7 @@ pub enum PromptIntent {
     Accept(String),
 }
 
-pub trait PromptComponent : Component {
+pub trait PromptComponent: Component {
     fn handle_prompt(&mut self, event: &Event) -> Option<PromptIntent>;
 }
 

@@ -1,4 +1,4 @@
-﻿use anyhow::{bail, Result};
+use anyhow::{bail, Result};
 use clap::Parser;
 
 #[derive(Parser, Debug)]
@@ -41,7 +41,8 @@ pub struct Args {
     #[arg(short, long, requires = "name")]
     pub non_interactive: bool,
 
-    /// Flurry attack an API by sending many identical requests in a short time.
+    /// Flurry attack an API by sending many identical requests in a short
+    /// time.
     #[arg(short, long, conflicts_with = "repeat", requires = "name")]
     pub flurry: Option<i32>,
 
@@ -58,7 +59,9 @@ pub struct Args {
 fn parse_key_val(s: &str) -> Result<(String, String)> {
     match s.find('=') {
         Some(0) => bail!("empty key in `{s}`"),
-        Some(pos) => Ok((s[..pos].trim().to_string(), s[pos + 1..].trim().to_string())),
+        Some(pos) => {
+            Ok((s[..pos].trim().to_string(), s[pos + 1..].trim().to_string()))
+        }
         None => bail!("no `=` found in `{s}`"),
     }
 }
