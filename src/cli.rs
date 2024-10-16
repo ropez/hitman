@@ -29,6 +29,10 @@ pub struct Args {
     )]
     pub select: bool,
 
+    /// Target to run a request against
+    #[arg(short, long)]
+    pub target: Option<String>,
+
     /// Show more output
     #[arg(short, long)]
     pub verbose: bool,
@@ -46,7 +50,8 @@ pub struct Args {
     #[arg(short, long, conflicts_with = "repeat", requires = "name")]
     pub flurry: Option<i32>,
 
-    /// Repeat the same request indefinely, with the given number of seconds delay between hits.
+    /// Repeat the same request indefinely, with the given number of seconds
+    /// delay between hits.
     #[arg(
         short,
         long,
