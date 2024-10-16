@@ -7,7 +7,8 @@ use std::path::Path;
 use tokio::sync::mpsc;
 
 use hitman::env::{
-    find_available_requests, find_root_dir, load_env, select_env, watch_list,
+    find_available_requests, find_root_dir, get_target, load_env, select_env,
+    watch_list,
 };
 use hitman::flurry::flurry_attack;
 use hitman::monitor::monitor;
@@ -39,13 +40,15 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
+    let target = args.target.unwrap_or_else(|| get_target(&root_dir));
+
     let cwd = current_dir()?;
 
     let result = if let Some(file_path) = args.name {
         let file_path = cwd.join(file_path);
 
         if let Some(flurry_size) = args.flurry {
-            let env = load_env(&root_dir, &file_path, &args.options)?;
+            let env = load_env(&root_dir, &target, &file_path, &args.options)?;
             flurry_attack(
                 &file_path,
                 flurry_size,
@@ -54,13 +57,14 @@ async fn main() -> Result<()> {
             )
             .await
         } else if let Some(delay_seconds) = args.monitor {
-            let env = load_env(&root_dir, &file_path, &args.options)?;
+            let env = load_env(&root_dir, &target, &file_path, &args.options)?;
             monitor(&file_path, delay_seconds, &env).await
         } else {
-            let res = run_once(&root_dir, &file_path, &args.options).await;
+            let res =
+                run_once(&root_dir, &target, &file_path, &args.options).await;
 
             if args.watch {
-                watch_mode(&root_dir, &file_path, &args.options).await
+                watch_mode(&root_dir, &target, &file_path, &args.options).await
             } else {
                 res
             }
@@ -82,7 +86,8 @@ async fn main() -> Result<()> {
 
             let file_path = &files[selected.index];
 
-            let result = run_once(&root_dir, file_path, &args.options).await;
+            let result =
+                run_once(&root_dir, &target, file_path, &args.options).await;
 
             if !args.repeat {
                 break result;
@@ -121,16 +126,18 @@ fn is_user_cancelation(err: &anyhow::Error) -> bool {
 
 async fn run_once(
     root_dir: &Path,
+    target: &str,
     file_path: &Path,
     options: &[(String, String)],
 ) -> Result<()> {
-    let env = load_env(root_dir, file_path, options)?;
+    let env = load_env(root_dir, target, file_path, options)?;
 
     make_request(file_path, &env).await
 }
 
 async fn watch_mode(
     root_dir: &Path,
+    target: &str,
     file_path: &Path,
     options: &[(String, String)],
 ) -> Result<()> {
@@ -146,7 +153,9 @@ async fn watch_mode(
         if let Some(event) = rx.recv().await {
             if let EventKind::Modify(_) = event.kind {
                 watcher.unwatch_all()?;
-                if let Err(err) = run_once(root_dir, file_path, options).await {
+                if let Err(err) =
+                    run_once(root_dir, target, file_path, options).await
+                {
                     error!("# {}", err)
                 }
                 watcher.watch_all()?;

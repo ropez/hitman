@@ -343,7 +343,7 @@ impl App {
 
         let http_file = resolve_http_file(&path)?;
 
-        let env = load_env(&root_dir, &http_file, &options)?;
+        let env = load_env(&root_dir, &self.target, &http_file, &options)?;
 
         let intent = match prepare_request(&path, &env)? {
             Ok(prepared_request) => Some(Intent::SendRequest {
@@ -400,8 +400,9 @@ impl App {
         let root_dir = self.root_dir.clone();
         let file_path = PathBuf::from(file_path);
 
+        let target = self.target.clone();
         let handle = tokio::spawn(async move {
-            make_request(prepared_request, &root_dir, &file_path).await
+            make_request(prepared_request, target, &root_dir, &file_path).await
         });
 
         let state = AppState::RunningRequest {
@@ -647,11 +648,12 @@ impl App {
 
 async fn make_request(
     req: HitmanRequest,
+    target: String,
     root_dir: &Path,
     file_path: &Path,
 ) -> HttpRequestInfo {
     let request = HttpRequestMessage(req.clone());
-    let status = match do_make_request(req, root_dir, file_path).await {
+    let status = match do_make_request(req, target, root_dir, file_path).await {
         Ok((response, elapsed)) => {
             RequestStatus::Complete { response, elapsed }
         }
@@ -666,12 +668,13 @@ async fn make_request(
 // FIXME: DRY request.rs
 async fn do_make_request(
     req: HitmanRequest,
+    target: String,
     root_dir: &Path,
     file_path: &Path,
 ) -> Result<(HttpMessage, Duration)> {
     let client = build_client()?;
     let options = vec![];
-    let env = load_env(root_dir, file_path, &options)?;
+    let env = load_env(root_dir, &target, file_path, &options)?;
 
     let (res, elapsed) = do_request(&client, &req).await?;
 
