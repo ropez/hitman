@@ -126,12 +126,11 @@ pub fn watch_list(root_dir: &Path, file_path: &Path) -> Vec<PathBuf> {
 
 pub fn load_env(
     root_dir: &Path,
+    target: &str,
     file_path: &Path,
     options: &[(String, String)],
 ) -> Result<TomlTable> {
     use Value::Table;
-
-    let target = get_target(root_dir);
 
     let mut env = TomlTable::new();
 
@@ -146,7 +145,7 @@ pub fn load_env(
             .collect::<Vec<_>>(),
     );
 
-    if let Some(Table(t)) = config.get(&target) {
+    if let Some(Table(t)) = config.get(target) {
         env.extend(t.clone());
     } else {
         bail!("`{}` not found in config", target);
