@@ -80,7 +80,7 @@ async fn main() -> Result<()> {
 
             eprintln!();
             let selected = Select::new("Select request", options)
-                .with_filter(&|filter, _, value, _| fuzzy_match(filter, value))
+                .with_scorer(&|filter, _, value, _| fuzzy_match(filter, value))
                 .with_page_size(15)
                 .prompt()?;
 

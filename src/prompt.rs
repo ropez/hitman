@@ -1,4 +1,5 @@
 use anyhow::{bail, Result};
+use fuzzy_matcher::skim::SkimMatcherV2;
 use inquire::{list_option::ListOption, DateSelect, Select, Text};
 use std::{env, path::Path};
 use toml::{Table, Value};
@@ -27,23 +28,10 @@ pub fn is_interactive_mode() -> bool {
     get_boolean("interactive")
 }
 
-pub fn fuzzy_match(filter: &str, value: &str) -> bool {
-    let value_lower = value.to_lowercase();
-    let filter_lower = filter.to_lowercase();
-
-    let mut value_chars = value_lower.chars();
-    let mut filter_chars = filter_lower.chars();
-
-    'outer: for filter_char in filter_chars.by_ref() {
-        for value_char in value_chars.by_ref() {
-            if value_char == filter_char {
-                continue 'outer;
-            }
-        }
-        return false;
-    }
-
-    true
+pub fn fuzzy_match(filter: &str, value: &str) -> Option<i64> {
+    let matcher = SkimMatcherV2::default();
+    let fuzzy_score = matcher.fuzzy(value, filter, true);
+    return fuzzy_score.map(|(score, _)| score)
 }
 
 pub fn get_interaction() -> Box<dyn UserInteraction> {
@@ -211,7 +199,7 @@ fn select_replacement(key: &str, values: &[Value]) -> Result<String> {
 
     let selected =
         Select::new(&format!("Select value for {}", key), list_options.clone())
-            .with_filter(&|filter, _, value, _| fuzzy_match(filter, value))
+            .with_scorer(&|filter, _, value, _| fuzzy_match(filter, value))
             .with_page_size(15)
             .prompt()?;
 
