@@ -65,7 +65,7 @@ pub fn select_env(root_dir: &Path) -> Result<()> {
 
     let selected = Select::new("Select target", items.clone())
         .with_page_size(15)
-        .with_filter(&|filter, _, value, _| fuzzy_match(filter, value))
+        .with_scorer(&|filter, _, value, _| fuzzy_match(filter, value))
         .prompt()?;
 
     set_target(root_dir, &selected)?;
