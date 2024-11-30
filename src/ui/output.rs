@@ -112,12 +112,11 @@ impl OutputView {
     }
 
     fn title(&self) -> &'static str {
-        let title = match &self.content {
+        match &self.content {
             Content::Empty => "",
             Content::Preview(_) => "Preview",
             Content::Request(_) => "Output",
-        };
-        title
+        }
     }
 
     fn mode_string(&self) -> String {
@@ -164,12 +163,7 @@ impl OutputView {
                         {
                             lines.extend(highlighted_lines);
                         } else {
-                            lines.extend(
-                                response
-                                    .body
-                                    .lines()
-                                    .map(|line| Line::from(line)),
-                            );
+                            lines.extend(response.body.lines().map(Line::from));
                         }
                     }
                     RequestStatus::Failed { error } => {
@@ -279,24 +273,21 @@ impl SyntaxHighlighter {
     }
 
     fn lines(&self) -> Option<Vec<Line>> {
-        match &self.cache {
-            Some(lines) => Some(
-                lines
-                    .iter()
-                    .map(|line| {
-                        let line_spans: Vec<Span> = line
-                            .iter()
-                            .filter_map(|seg| {
-                                into_span((seg.0, seg.1.as_str())).ok()
-                            })
-                            .collect();
+        self.cache.as_ref().map(|lines| {
+            lines
+                .iter()
+                .map(|line| {
+                    let line_spans: Vec<Span> = line
+                        .iter()
+                        .filter_map(|seg| {
+                            into_span((seg.0, seg.1.as_str())).ok()
+                        })
+                        .collect();
 
-                        Line::from(line_spans)
-                    })
-                    .collect(),
-            ),
-            None => None,
-        }
+                    Line::from(line_spans)
+                })
+                .collect()
+        })
     }
 
     fn update(&mut self, extension: &str, text: &str) {

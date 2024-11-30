@@ -31,7 +31,7 @@ pub fn is_interactive_mode() -> bool {
 pub fn fuzzy_match(filter: &str, value: &str) -> Option<i64> {
     let matcher = SkimMatcherV2::default();
     let fuzzy_score = matcher.fuzzy(value, filter, true);
-    return fuzzy_score.map(|(score, _)| score)
+    fuzzy_score.map(|(score, _)| score)
 }
 
 pub fn get_interaction() -> Box<dyn UserInteraction> {

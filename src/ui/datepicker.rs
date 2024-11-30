@@ -29,8 +29,7 @@ impl DatePicker {
     pub fn with_fallback(self, fallback: Option<String>) -> Self {
         Self {
             selected: fallback
-                .map(|f| f.parse::<NaiveDate>().ok())
-                .flatten()
+                .and_then(|f| f.parse::<NaiveDate>().ok())
                 .unwrap_or(self.selected),
             ..self
         }

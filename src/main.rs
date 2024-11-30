@@ -119,9 +119,10 @@ async fn main() -> Result<()> {
 
 fn is_user_cancelation(err: &anyhow::Error) -> bool {
     use inquire::InquireError::*;
-    false
-        || matches!(err.downcast_ref(), Some(OperationCanceled))
-        || matches!(err.downcast_ref(), Some(OperationInterrupted))
+    matches!(
+        err.downcast_ref(),
+        Some(OperationCanceled) | Some(OperationInterrupted)
+    )
 }
 
 async fn run_once(

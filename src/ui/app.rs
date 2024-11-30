@@ -29,23 +29,19 @@ use hitman::{
     substitute::{prepare_request, SubstituteError},
 };
 
-use crate::ui::{
-    output::{HttpRequestInfo, RequestStatus},
-    PromptIntent,
-};
-
 use super::{
     centered,
     datepicker::DatePicker,
     help::Help,
     keymap::{mapkey, KeyMapping},
     output::{HttpMessage, HttpRequestMessage, OutputView},
+    output::{HttpRequestInfo, RequestStatus},
     progress::Progress,
     prompt::SimplePrompt,
     select::{
         PromptSelectItem, RequestSelector, Select, SelectIntent, SelectItem,
     },
-    Component, InteractiveComponent, PromptComponent,
+    Component, InteractiveComponent, PromptComponent, PromptIntent,
 };
 
 pub trait Screen {
@@ -469,7 +465,7 @@ impl InteractiveComponent for App {
                         component,
                         ..
                     } => {
-                        if let Some(intent) = component.handle_prompt(&event) {
+                        if let Some(intent) = component.handle_prompt(event) {
                             match intent {
                                 PromptIntent::Abort => {
                                     return Some(Abort);
@@ -485,7 +481,7 @@ impl InteractiveComponent for App {
                         }
                         return None;
                     }
-                    AppState::ShowHelp => match mapkey(&event) {
+                    AppState::ShowHelp => match mapkey(event) {
                         KeyMapping::Abort
                         | KeyMapping::Accept
                         | KeyMapping::ToggleHelp => {
@@ -495,7 +491,7 @@ impl InteractiveComponent for App {
                     },
                     AppState::Idle => {
                         if let Some(intent) =
-                            self.request_selector.handle_event(&event)
+                            self.request_selector.handle_event(event)
                         {
                             match intent {
                                 SelectIntent::Abort => (),
@@ -511,9 +507,9 @@ impl InteractiveComponent for App {
                             }
                         }
 
-                        self.output_view.handle_event(&event);
+                        self.output_view.handle_event(event);
 
-                        match mapkey(&event) {
+                        match mapkey(event) {
                             KeyMapping::Editor => {
                                 return Some(Intent::EditRequest)
                             }
@@ -549,14 +545,14 @@ impl InteractiveComponent for App {
                     }
 
                     AppState::RunningRequest { handle, .. } => {
-                        if let KeyMapping::Abort = mapkey(&event) {
+                        if let KeyMapping::Abort = mapkey(event) {
                             handle.abort();
                             return Some(Abort);
                         }
                     }
 
                     AppState::NewRequestPrompt { prompt } => {
-                        if let Some(intent) = prompt.handle_prompt(&event) {
+                        if let Some(intent) = prompt.handle_prompt(event) {
                             match intent {
                                 PromptIntent::Abort => {
                                     return Some(Abort);
@@ -569,7 +565,7 @@ impl InteractiveComponent for App {
                     }
 
                     AppState::SelectTarget { component } => {
-                        if let Some(intent) = component.handle_event(&event) {
+                        if let Some(intent) = component.handle_event(event) {
                             match intent {
                                 SelectIntent::Abort => {
                                     return Some(Abort);
