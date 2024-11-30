@@ -37,6 +37,7 @@ use crate::ui::{
 use super::{
     centered,
     datepicker::DatePicker,
+    help::Help,
     keymap::{mapkey, KeyMapping},
     output::{HttpMessage, HttpRequestMessage, OutputView},
     progress::Progress,
@@ -70,6 +71,8 @@ pub struct App {
 pub enum AppState {
     Idle,
 
+    ShowHelp,
+
     PendingValue {
         file_path: String,
         key: String,
@@ -94,6 +97,7 @@ pub enum AppState {
 pub enum Intent {
     Quit,
     Abort,
+    ShowHelp,
     Update(Option<String>),
     PreviewRequest(Option<String>),
     PrepareRequest(String, Vec<(String, String)>),
@@ -183,6 +187,9 @@ impl App {
             }
             Abort => {
                 self.set_state(AppState::Idle);
+            }
+            ShowHelp => {
+                self.set_state(AppState::ShowHelp);
             }
             Update(selected) => {
                 self.populate_requests()?;
@@ -441,6 +448,7 @@ impl Component for App {
 
         self.render_main(frame, layout[0]);
         self.render_status(frame, layout[1]);
+        self.render_help(frame);
         self.render_popup(frame);
     }
 }
@@ -477,6 +485,14 @@ impl InteractiveComponent for App {
                         }
                         return None;
                     }
+                    AppState::ShowHelp => match mapkey(&event) {
+                        KeyMapping::Abort
+                        | KeyMapping::Accept
+                        | KeyMapping::ToggleHelp => {
+                            return Some(Intent::Abort);
+                        }
+                        _ => (),
+                    },
                     AppState::Idle => {
                         if let Some(intent) =
                             self.request_selector.handle_event(&event)
@@ -524,6 +540,9 @@ impl InteractiveComponent for App {
                                 } else {
                                     self.vsplit -= 5;
                                 }
+                            }
+                            KeyMapping::ToggleHelp => {
+                                return Some(Intent::ShowHelp);
                             }
                             _ => (),
                         }
@@ -611,12 +630,18 @@ impl App {
         let status_line = match &self.error {
             Some(msg) => Paragraph::new(msg.clone()).red().reversed(),
             None => Paragraph::new(
-                "Ctrl+S: Select target, Ctrl+E: Edit selected request, Ctrl+R: New request, [<>] Adjust width, [,] Tottle wrapping",
+                "Ctrl+S: Select target, ? - Show keyboard shortcuts",
             )
             .dark_gray(),
         };
 
         frame.render_widget(status_line, layout[2]);
+    }
+
+    fn render_help(&mut self, frame: &mut Frame) {
+        if let AppState::ShowHelp = &mut self.state {
+            Help.render_ui(frame, frame.area());
+        }
     }
 
     fn render_popup(&mut self, frame: &mut Frame) {

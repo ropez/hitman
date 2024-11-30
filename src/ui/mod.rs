@@ -11,6 +11,7 @@ pub mod output;
 pub mod progress;
 pub mod prompt;
 pub mod select;
+pub mod help;
 
 pub trait Component {
     fn render_ui(&mut self, frame: &mut Frame, area: Rect);
