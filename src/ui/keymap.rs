@@ -12,6 +12,7 @@ pub enum KeyMapping {
     ScrollUp,
     ScrollDown,
     SelectTarget,
+    ToggleHelp,
     ToggleWrap,
     ToggleHeaders,
     Reload,
@@ -59,7 +60,27 @@ fn mapkey_keypress(key: &KeyEvent) -> KeyMapping {
         (KeyModifiers::NONE, Char('>')) => KeyMapping::IncreaseWidth,
         (KeyModifiers::NONE, Char(';')) => KeyMapping::ToggleWrap,
         (KeyModifiers::NONE, Char(',')) => KeyMapping::ToggleWrap,
+        (KeyModifiers::NONE, Char('?')) => KeyMapping::ToggleHelp,
 
         _ => KeyMapping::None,
     }
+}
+
+pub fn keymap_list() -> Vec<(&'static str, &'static str)> {
+    return vec![
+        ("<C-j> or <C-n>", "Select next"),
+        ("<C-k> or <C-p>", "Select previous"),
+        ("<C-u>", "Scroll up"),
+        ("<C-d>", "Scroll down"),
+        ("<C-s>", "Select target"),
+        ("<C-r>", "Re-scan folder"),
+        ("<C-e>", "Edit selected request"),
+        ("<C-a>", "New request"),
+        ("<Esc> or <C-c>", "Abort"),
+        ("<C-space>", "Toggle request headers"),
+        (",", "Toggle output wrapping"),
+        ("?", "Toggle this help message"),
+        ("<", "Increase output width"),
+        (">", "Decrease output width"),
+    ];
 }
