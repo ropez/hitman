@@ -38,10 +38,10 @@ impl SimplePrompt {
 
     fn value(&self) -> String {
         let input_value = self.input.value().to_string();
-        if input_value.len() > 0 {
-            input_value
-        } else {
+        if input_value.is_empty() {
             self.fallback.clone().unwrap_or(input_value)
+        } else {
+            input_value
         }
     }
 }
@@ -59,7 +59,7 @@ impl Component for SimplePrompt {
         spans.push(Span::from(input_value));
         let cur = spans[0].width() as u16;
 
-        if input_value.len() == 0 {
+        if input_value.is_empty() {
             if let Some(value) = &self.fallback {
                 spans.push(Span::from(value).dark_gray());
             }

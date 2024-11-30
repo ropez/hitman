@@ -67,7 +67,7 @@ fn mapkey_keypress(key: &KeyEvent) -> KeyMapping {
 }
 
 pub fn keymap_list() -> Vec<(&'static str, &'static str)> {
-    return vec![
+    vec![
         ("<C-j> or <C-n>", "Select next"),
         ("<C-k> or <C-p>", "Select previous"),
         ("<C-u>", "Scroll up"),
@@ -82,5 +82,5 @@ pub fn keymap_list() -> Vec<(&'static str, &'static str)> {
         ("?", "Toggle this help message"),
         ("<", "Increase output width"),
         (">", "Decrease output width"),
-    ];
+    ]
 }
