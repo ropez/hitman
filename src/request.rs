@@ -154,10 +154,14 @@ async fn parse_stream_output(response: Response) -> Result<()> {
         let s = std::str::from_utf8(&item)?;
         // Parse the json from the stream according to
         // https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events/Using_server-sent_events#event_stream_format
-        // Assume that the data is json formatted
         if let (Some(start), Some(end)) = (s.find("data:"), s.find("\n\n")) {
-            let json = serde_json::Value::from_str(&s[start + 5..end])?;
-            println!("{}", serde_json::to_string_pretty(&json)?);
+            let data_str = s[start + 5..end].trim();
+            // Fallback to print text to stdout if data cannot be parsed as json
+            let output = match serde_json::Value::from_str(data_str) {
+                Ok(json) => &serde_json::to_string_pretty(&json)?,
+                Err(_) => data_str,
+            };
+            println!("{}", output);
         }
     }
     Ok(())
