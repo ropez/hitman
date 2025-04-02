@@ -1,16 +1,20 @@
 use anyhow::{anyhow, bail, Context, Result};
+use futures::StreamExt;
 use graphql_parser::query::{
     Definition, OperationDefinition, VariableDefinition,
 };
 
 use log::{info, log_enabled, warn, Level};
-use reqwest::{header::HeaderMap, Client, Method, Response, Url};
+use reqwest::{
+    header::{HeaderMap, CONTENT_TYPE},
+    Client, Method, Response, Url,
+};
 use serde_json::{json, Value};
 use spinoff::{spinners, Color, Spinner, Streams};
 use std::{
     fmt::Display,
     path::{Path, PathBuf},
-    str::{self},
+    str::{self, FromStr},
     sync::Arc,
     time::Duration,
 };
@@ -126,6 +130,13 @@ pub async fn make_request(file_path: &Path, env: &Table) -> Result<()> {
 
     print_response(&response)?;
 
+    // Subscription for graphql is a stream
+    if let Some(content_type) = response.headers().get(CONTENT_TYPE) {
+        if content_type.to_str()?.contains("text/event-stream") {
+            return parse_stream_output(response).await;
+        }
+    }
+
     if let Ok(json) = response.json::<Value>().await {
         println!("{}", serde_json::to_string_pretty(&json)?);
         let vars = extract_variables(&json, env)?;
@@ -134,6 +145,25 @@ pub async fn make_request(file_path: &Path, env: &Table) -> Result<()> {
 
     warn!("# Request completed in {:.2?}", elapsed);
 
+    Ok(())
+}
+
+async fn parse_stream_output(response: Response) -> Result<()> {
+    let mut stream = response.bytes_stream();
+    while let Some(Ok(item)) = stream.next().await {
+        let s = std::str::from_utf8(&item)?;
+        // Parse the json from the stream according to
+        // https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events/Using_server-sent_events#event_stream_format
+        if let (Some(start), Some(end)) = (s.find("data:"), s.find("\n\n")) {
+            let data_str = s[start + 5..end].trim();
+            // Fallback to print text to stdout if data cannot be parsed as json
+            let output = match serde_json::Value::from_str(data_str) {
+                Ok(json) => &serde_json::to_string_pretty(&json)?,
+                Err(_) => data_str,
+            };
+            println!("{}", output);
+        }
+    }
     Ok(())
 }
 
@@ -226,6 +256,7 @@ pub fn resolve_http_file(path: &Path) -> Result<PathBuf> {
 pub enum GraphQLOperation {
     Query,
     Mutation,
+    Subscription,
 }
 
 impl Display for GraphQLOperation {
@@ -233,6 +264,7 @@ impl Display for GraphQLOperation {
         match self {
             GraphQLOperation::Query => write!(f, "query"),
             GraphQLOperation::Mutation => write!(f, "mutation"),
+            GraphQLOperation::Subscription => write!(f, "subscription"),
         }
     }
 }
@@ -260,7 +292,9 @@ where
                 variables(&m.variable_definitions)
             }
             OperationDefinition::SelectionSet(_) => bail!("Not supported"),
-            OperationDefinition::Subscription(_) => bail!("Not supported"),
+            OperationDefinition::Subscription(s) => {
+                variables(&s.variable_definitions)
+            }
         },
         Definition::Fragment(_) => bail!("Not supported"),
     };
