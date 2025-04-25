@@ -265,6 +265,8 @@ pub fn find_available_requests(cwd: &Path) -> Result<Vec<PathBuf>> {
 
 #[cfg(test)]
 mod tests {
+    use mktemp::Temp;
+
     use super::*;
 
     macro_rules! toml {
@@ -275,8 +277,9 @@ mod tests {
 
     #[test]
     fn test_find_environments() {
-        let config: PathBuf = toml! {
-        r#"
+        let tmp = Temp::new_dir().unwrap();
+
+        let config = r#"
             global = "foo"
 
             [foo]
@@ -286,10 +289,11 @@ mod tests {
 
             [_default]
             fallback = "self"
-        "#
-        };
+        "#;
 
-        let envs = find_environments(&config).unwrap();
+        fs::write(Path::join(&tmp, "hitman.toml"), config.as_bytes()).unwrap();
+
+        let envs = find_environments(&tmp).unwrap();
 
         assert_eq!(envs, vec!["bar", "foo"]);
     }
