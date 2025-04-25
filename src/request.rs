@@ -164,6 +164,11 @@ async fn parse_stream_output(response: Response) -> Result<()> {
 }
 
 fn clear_screen() {
+    let stdout = std::io::stdout();
+    if !stdout.is_terminal() {
+        return;
+    }
+
     if cfg!(windows) {
         std::process::Command::new("cmd")
             .args(["/c", "cls"])
