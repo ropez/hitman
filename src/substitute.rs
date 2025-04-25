@@ -287,9 +287,15 @@ mod tests {
     #[test]
     fn substitutes_default_value() {
         let env = create_env();
-        let res = substitute("foo: {{href | fallback.com }}\n", &env).unwrap();
+        let err = substitute("foo: {{href | fallback.com }}\n", &env).unwrap_err();
 
-        assert_eq!(&res, "foo: fallback.com\n");
+        assert!(matches!(
+            err,
+            SubstituteError::ValueNotFound {
+                key,
+                fallback: Some(fb),
+            } if key == "href" && fb == "fallback.com"
+        ));
     }
 
     #[test]
