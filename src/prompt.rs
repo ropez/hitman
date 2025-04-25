@@ -219,42 +219,42 @@ mod tests {
 
     #[test]
     fn returns_true_for_identical() {
-        assert!(fuzzy_match("a", "a"));
+        assert!(fuzzy_match("a", "a").is_some());
     }
 
     #[test]
     fn returns_false_for_different() {
-        assert!(!fuzzy_match("a", "b"));
+        assert!(fuzzy_match("a", "b").is_none());
     }
 
     #[test]
     fn returns_false_for_different_length() {
-        assert!(!fuzzy_match("ab", "a"));
+        assert!(fuzzy_match("ab", "a").is_none());
     }
 
     #[test]
     fn returns_true_for_different_case() {
-        assert!(fuzzy_match("a", "A"));
+        assert!(fuzzy_match("a", "A").is_some());
     }
 
     #[test]
     fn returns_true_if_filter_is_empty() {
-        assert!(fuzzy_match("", "a"));
+        assert!(fuzzy_match("", "a").is_some());
     }
 
     #[test]
     fn returns_false_if_value_is_empty() {
-        assert!(!fuzzy_match("a", ""));
+        assert!(fuzzy_match("a", "").is_none());
     }
 
     #[test]
     fn returns_true_value_contains_filter() {
-        assert!(fuzzy_match("a", "ab"));
+        assert!(fuzzy_match("a", "ab").is_some());
     }
 
     #[test]
     fn returns_true_if_value_contains_all_letters_in_filter_in_the_same_order()
     {
-        assert!(fuzzy_match("abc", "uaaxbycz"));
+        assert!(fuzzy_match("abc", "uaaxbycz").is_some());
     }
 }
