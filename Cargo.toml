@@ -41,3 +41,6 @@ tui-input = "0.11.0"
 syntect-tui = "3.0.4"
 syntect = "5.2.0"
 graphql-parser = "0.4.0"
+
+[dev-dependencies]
+mktemp = "0.5.1"
