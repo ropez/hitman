@@ -152,12 +152,12 @@ pub fn load_env(
     }
 
     if let Ok(content) = read_toml(&file_path.with_extension("http.toml")) {
-        env.extend(content)
+        env.extend(content);
     }
 
     // FIXME state per environment
     if let Ok(content) = read_toml(&root_dir.join(DATA_FILE)) {
-        env.extend(content)
+        env.extend(content);
     }
 
     // Extra values passed on the command line
@@ -211,20 +211,18 @@ fn read_and_merge_config(root_dir: &Path) -> Result<TomlTable> {
 /// Merge Toml tables recursively, merging child tables into
 /// existing child tables.
 fn merge(config: &mut TomlTable, other: TomlTable) {
-    other.into_iter().for_each(move |(k, v)| {
-        match v {
-            Value::Table(t) => {
-                let cur = config.get_mut(&k);
-                if let Some(Value::Table(ref mut ext)) = cur {
-                    merge(ext, t);
-                } else {
-                    config.insert(k, Value::Table(t));
-                };
+    other.into_iter().for_each(move |(k, v)| match v {
+        Value::Table(t) => {
+            let cur = config.get_mut(&k);
+            if let Some(Value::Table(ref mut ext)) = cur {
+                merge(ext, t);
+            } else {
+                config.insert(k, Value::Table(t));
             }
-            _ => {
-                config.insert(k, v);
-            }
-        };
+        }
+        _ => {
+            config.insert(k, v);
+        }
     });
 }
 
@@ -241,16 +239,13 @@ pub fn find_available_requests(cwd: &Path) -> Result<Vec<PathBuf>> {
         .into_iter()
         .filter_map(|e| e.ok())
         .filter(|e| {
-            e.file_name()
-                .to_str()
-                .map(|s| {
-                    // Ignore special _graphql.http file
-                    s != "_graphql.http"
-                        && (s.ends_with(".http")
-                            || s.ends_with(".gql")
-                            || s.ends_with(".graphql"))
-                })
-                .unwrap_or(false)
+            e.file_name().to_str().is_some_and(|s| {
+                // Ignore special _graphql.http file
+                s != "_graphql.http"
+                    && (s.ends_with(".http")
+                        || s.ends_with(".gql")
+                        || s.ends_with(".graphql"))
+            })
         })
         .map(|p| {
             // Convert to relative path, based on depth

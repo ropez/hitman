@@ -12,11 +12,7 @@ use reqwest::{
 use serde_json::{json, Value};
 use spinoff::{spinners, Color, Spinner, Streams};
 use std::{
-    fmt::Display,
-    path::{Path, PathBuf},
-    str::{self, FromStr},
-    sync::Arc,
-    time::Duration,
+    fmt::Display, io::IsTerminal, path::{Path, PathBuf}, str::{self, FromStr}, sync::Arc, time::Duration
 };
 use toml::Table;
 
