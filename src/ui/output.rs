@@ -140,7 +140,7 @@ impl OutputView {
                 let blue = Style::new().blue();
 
                 for line in info.request.0.to_string().lines() {
-                    lines.push(Line::styled(format!("> {}", line), blue));
+                    lines.push(Line::styled(format!("> {line}"), blue));
                 }
 
                 if !self.noheaders {
@@ -191,7 +191,7 @@ impl Component for OutputView {
     fn render_ui(&mut self, frame: &mut Frame, area: Rect) {
         let title_bottom = if let Content::Request(info) = &self.content {
             if let RequestStatus::Complete { elapsed, .. } = &info.status {
-                format!("Elapsed: {:.2?}", elapsed)
+                format!("Elapsed: {elapsed:.2?}")
             } else {
                 String::new()
             }

@@ -65,7 +65,7 @@ pub async fn flurry_attack(
     let results: Vec<_> = join_all(handles)
         .await
         .into_iter()
-        .filter_map(|h| h.ok())
+        .filter_map(Result::ok)
         .flatten()
         .flatten()
         .collect();
@@ -74,12 +74,12 @@ pub async fn flurry_attack(
     let elapsed = t.elapsed();
 
     let average =
-        results.iter().map(|(_, d)| d).sum::<Duration>() / results.len() as u32;
+        results.iter().map(|(_, d)| d).sum::<Duration>() / u32::try_from(results.len())?;
 
     let statuses = results.iter().map(|(s, _)| s).counted();
     let statuses = statuses
         .iter()
-        .map(|(s, c)| format!("{} ({})", s, c))
+        .map(|(s, c)| format!("{s} ({c})"))
         .collect::<Vec<_>>()
         .join(", ");
 

@@ -121,7 +121,7 @@ fn is_user_cancelation(err: &anyhow::Error) -> bool {
     use inquire::InquireError::*;
     matches!(
         err.downcast_ref(),
-        Some(OperationCanceled) | Some(OperationInterrupted)
+        Some(OperationCanceled | OperationInterrupted)
     )
 }
 
@@ -157,7 +157,7 @@ async fn watch_mode(
                 if let Err(err) =
                     run_once(root_dir, target, file_path, options).await
                 {
-                    error!("# {}", err)
+                    error!("# {err}");
                 }
                 watcher.watch_all()?;
             }

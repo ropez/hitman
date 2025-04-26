@@ -206,7 +206,7 @@ impl App {
                 let req = HttpRequestMessage(prepared_request.clone());
                 let info = HttpRequestInfo::new(req, RequestStatus::Running);
                 self.output_view.show_request(info);
-                self.send_request(file_path, prepared_request)?;
+                self.send_request(file_path, prepared_request);
             }
             AskForValue {
                 key,
@@ -221,7 +221,7 @@ impl App {
                                 "Select substitution value for {{{{{key}}}}}",
                             ),
                             key.clone(),
-                            values.clone(),
+                            values,
                         ))
                     }
 
@@ -288,7 +288,7 @@ impl App {
                 self.error = Some(err);
                 self.state = AppState::Idle;
             }
-        };
+        }
 
         Ok(None)
     }
@@ -336,7 +336,7 @@ impl App {
     }
 
     fn try_request(
-        &mut self,
+        &self,
         file_path: String,
         options: Vec<(String, String)>,
     ) -> Result<Option<Intent>> {
@@ -383,7 +383,7 @@ impl App {
 
             // TODO: Highlight substitutions and current values
 
-            let f = read_to_string(path.clone())?;
+            let f = read_to_string(path)?;
 
             self.request_selector.try_select(&file_path);
 
@@ -399,7 +399,7 @@ impl App {
         &mut self,
         file_path: String,
         prepared_request: HitmanRequest,
-    ) -> Result<()> {
+    ) {
         let root_dir = self.root_dir.clone();
         let file_path = PathBuf::from(file_path);
 
@@ -413,8 +413,6 @@ impl App {
             progress: Progress,
         };
         self.set_state(state);
-
-        Ok(())
     }
 }
 
@@ -602,7 +600,7 @@ impl App {
         self.request_selector.render_ui(frame, area);
     }
 
-    fn render_status(&mut self, frame: &mut Frame, area: Rect) {
+    fn render_status(&self, frame: &mut Frame, area: Rect) {
         let area = area.inner(Margin::new(1, 0));
 
         let layout = Layout::default()
@@ -623,19 +621,21 @@ impl App {
         );
 
         // FIXME: <Ctrl+?> opens key mapping window
-        let status_line = match &self.error {
-            Some(msg) => Paragraph::new(msg.clone()).red().reversed(),
-            None => Paragraph::new(
-                "Ctrl+S: Select target, ? - Show keyboard shortcuts",
-            )
-            .dark_gray(),
-        };
+        let status_line = self.error.as_ref().map_or_else(
+            || {
+                Paragraph::new(
+                    "Ctrl+S: Select target, ? - Show keyboard shortcuts",
+                )
+                .dark_gray()
+            },
+            |msg| Paragraph::new(msg.clone()).red().reversed(),
+        );
 
         frame.render_widget(status_line, layout[2]);
     }
 
-    fn render_help(&mut self, frame: &mut Frame) {
-        if let AppState::ShowHelp = &mut self.state {
+    fn render_help(&self, frame: &mut Frame) {
+        if matches!(self.state, AppState::ShowHelp) {
             Help.render_ui(frame, frame.area());
         }
     }
@@ -724,8 +724,8 @@ async fn do_make_request(
 impl SelectItem for Value {
     fn text(&self) -> String {
         match self {
-            Value::Table(t) => match t.get("name") {
-                Some(Value::String(value)) => value.clone(),
+            Self::Table(t) => match t.get("name") {
+                Some(Self::String(value)) => value.clone(),
                 Some(value) => value.to_string(),
                 None => t.to_string(),
             },
@@ -737,8 +737,8 @@ impl SelectItem for Value {
 impl PromptSelectItem for Value {
     fn to_value(&self) -> String {
         match self {
-            Value::Table(t) => match t.get("value") {
-                Some(Value::String(value)) => value.clone(),
+            Self::Table(t) => match t.get("value") {
+                Some(Self::String(value)) => value.clone(),
                 Some(value) => value.to_string(),
                 _ => t.to_string(),
             },

@@ -12,7 +12,12 @@ use reqwest::{
 use serde_json::{json, Value};
 use spinoff::{spinners, Color, Spinner, Streams};
 use std::{
-    fmt::Display, io::IsTerminal, path::{Path, PathBuf}, str::{self, FromStr}, sync::Arc, time::Duration
+    fmt::{Display, Write},
+    io::IsTerminal,
+    path::{Path, PathBuf},
+    str::{self, FromStr},
+    sync::Arc,
+    time::Duration,
 };
 use toml::Table;
 
@@ -37,15 +42,15 @@ pub enum HitmanBody {
 impl Display for HitmanBody {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            HitmanBody::REST { body } => write!(f, "{}", body),
-            HitmanBody::GraphQL { body, variables } => match variables {
+            Self::REST { body } => write!(f, "{body}"),
+            Self::GraphQL { body, variables } => match variables {
                 Some(v) => {
                     let vars = serde_json::to_string_pretty(&v)
                         .unwrap_or_else(|_| v.to_string());
 
-                    write!(f, "{}\n{}", body, vars)
+                    write!(f, "{body}\n{vars}")
                 }
-                None => write!(f, "{}", body),
+                None => write!(f, "{body}"),
             },
         }
     }
@@ -54,11 +59,11 @@ impl Display for HitmanBody {
 impl HitmanBody {
     pub fn to_body(self) -> String {
         match self {
-            HitmanBody::REST { body } => body,
-            HitmanBody::GraphQL { body, variables } => match variables {
-                Some(v) => json!({"query": body, "variables": v}).to_string(),
-                None => json!({"query": body}).to_string(),
-            },
+            Self::REST { body } => body,
+            Self::GraphQL { body, variables } => variables.map_or_else(
+                || json!({"query": body}).to_string(),
+                |v| json!({"query": body, "variables": v}).to_string(),
+            ),
         }
     }
 }
@@ -74,7 +79,7 @@ pub struct HitmanRequest {
 impl Display for HitmanRequest {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         writeln!(f, "{} {}", self.method.as_str(), self.url.as_str())?;
-        for (key, val) in self.headers.iter() {
+        for (key, val) in &self.headers {
             writeln!(
                 f,
                 "{}: {}",
@@ -86,7 +91,7 @@ impl Display for HitmanRequest {
         if let Some(ref body) = self.body {
             writeln!(f)?;
             for line in body.to_string().lines() {
-                writeln!(f, "{}", line)?;
+                writeln!(f, "{line}")?;
             }
         }
         write!(f, "")
@@ -157,7 +162,7 @@ async fn parse_stream_output(response: Response) -> Result<()> {
                 Ok(json) => &serde_json::to_string_pretty(&json)?,
                 Err(_) => data_str,
             };
-            println!("{}", output);
+            println!("{output}");
         }
     }
     Ok(())
@@ -219,7 +224,7 @@ fn print_response(res: &Response) -> Result<()> {
 
         let mut head = String::new();
         for (name, value) in res.headers() {
-            head.push_str(&format!("{}: {}\n", name, value.to_str()?));
+            writeln!(head, "{}: {}", name, value.to_str()?)?;
         }
 
         for line in head.lines() {
@@ -237,7 +242,7 @@ pub fn resolve_http_file(path: &Path) -> Result<PathBuf> {
     let ext = path.extension().context("Couldn't find extension")?;
     if ext != "gql" && ext != "graphql" {
         return Ok(path.to_path_buf());
-    };
+    }
 
     let mut dir = path.parent().context("No parent")?.to_path_buf();
     loop {
@@ -263,9 +268,9 @@ pub enum GraphQLOperation {
 impl Display for GraphQLOperation {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            GraphQLOperation::Query => write!(f, "query"),
-            GraphQLOperation::Mutation => write!(f, "mutation"),
-            GraphQLOperation::Subscription => write!(f, "subscription"),
+            Self::Query => write!(f, "query"),
+            Self::Mutation => write!(f, "mutation"),
+            Self::Subscription => write!(f, "subscription"),
         }
     }
 }
@@ -286,8 +291,8 @@ where
         vars.iter().map(|d| d.name.clone()).collect::<Vec<_>>()
     };
 
-    let args = match doc.definitions[0] {
-        Definition::Operation(ref op) => match op {
+    let args = match doc.definitions.first() {
+        Some(Definition::Operation(ref op)) => match op {
             OperationDefinition::Query(q) => variables(&q.variable_definitions),
             OperationDefinition::Mutation(m) => {
                 variables(&m.variable_definitions)
@@ -297,7 +302,7 @@ where
                 variables(&s.variable_definitions)
             }
         },
-        Definition::Fragment(_) => bail!("Not supported"),
+        _ => bail!("Not supported"),
     };
 
     Ok(args)
