@@ -14,13 +14,13 @@ pub async fn monitor(
     delay_seconds: i32,
     env: &Table,
 ) -> Result<()> {
-    if delay_seconds < 0 {
+    let Ok(delay) = u64::try_from(delay_seconds) else {
         bail!("Invalid delay");
-    }
+    };
 
     let client = build_client()?;
 
-    warn!("# Repeating every {delay_seconds} seconds, until interrupted...");
+    warn!("# Repeating every {delay} seconds, until interrupted...");
 
     let interaction = get_interaction();
     let req =
@@ -37,8 +37,8 @@ pub async fn monitor(
             Err(e) => {
                 eprintln!("{e}");
             }
-        };
+        }
 
-        sleep(Duration::from_secs(delay_seconds as u64)).await;
+        sleep(Duration::from_secs(delay)).await;
     }
 }

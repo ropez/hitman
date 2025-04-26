@@ -1,7 +1,7 @@
 use anyhow::{bail, Result};
 use fuzzy_matcher::skim::SkimMatcherV2;
 use inquire::{list_option::ListOption, DateSelect, Select, Text};
-use std::{env, path::Path};
+use std::{env, path::Path, string::ToString};
 use toml::{Table, Value};
 
 use crate::{
@@ -14,10 +14,7 @@ fn set_boolean(name: &str, value: bool) {
 }
 
 fn get_boolean(name: &str) -> bool {
-    match env::var(name) {
-        Ok(v) => v == "y",
-        _ => false,
-    }
+    env::var(name).is_ok_and(|v| v == "y")
 }
 
 pub fn set_interactive_mode(enable: bool) {
@@ -115,7 +112,7 @@ pub struct NoUserInteraction;
 
 impl UserInteraction for NoUserInteraction {
     fn prompt(&self, key: &str, fallback: Option<&str>) -> Result<String> {
-        if let Some(val) = fallback.map(|f| f.to_string()) {
+        if let Some(val) = fallback.map(ToString::to_string) {
             return Ok(val);
         }
 
@@ -158,7 +155,7 @@ fn prompt_user(key: &str, fallback: Option<&str>) -> Result<String> {
         }
     }
 
-    let input = Text::new(&format!("Enter value for {}", key))
+    let input = Text::new(&format!("Enter value for {key}"))
         .with_default(fb)
         .prompt()?;
 
@@ -166,7 +163,7 @@ fn prompt_user(key: &str, fallback: Option<&str>) -> Result<String> {
 }
 
 fn prompt_for_date(key: &str) -> Result<Option<String>> {
-    let msg = format!("Select a date for {}", key);
+    let msg = format!("Select a date for {key}");
     let formatter =
         |date: chrono::NaiveDate| date.format("%Y-%m-%d").to_string();
 
@@ -198,7 +195,7 @@ fn select_replacement(key: &str, values: &[Value]) -> Result<String> {
         .collect();
 
     let selected =
-        Select::new(&format!("Select value for {}", key), list_options.clone())
+        Select::new(&format!("Select value for {key}"), list_options)
             .with_scorer(&|filter, _, value, _| fuzzy_match(filter, value))
             .with_page_size(15)
             .prompt()?;

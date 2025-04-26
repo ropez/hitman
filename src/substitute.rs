@@ -384,7 +384,7 @@ mod tests {
         let env = create_env();
         let res = substitute("foo {{url\n", &env);
 
-        assert!(res.is_err())
+        assert!(res.is_err());
     }
 
     #[test]
@@ -392,6 +392,6 @@ mod tests {
         let env = create_env();
         let res = substitute("foo url}} bar\n", &env);
 
-        assert!(res.is_err())
+        assert!(res.is_err());
     }
 }

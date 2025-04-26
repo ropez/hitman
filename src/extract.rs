@@ -21,7 +21,7 @@ pub fn extract_variables(data: &JsonValue, scope: &Table) -> Result<Table> {
                             selector.find(data).next()
                         {
                             let msg =
-                                format!("# Got string '{}' = '{}'", key, val);
+                                format!("# Got string '{key}' = '{val}'");
                             info!("{}", truncate(&msg));
 
                             out.insert(
@@ -33,10 +33,7 @@ pub fn extract_variables(data: &JsonValue, scope: &Table) -> Result<Table> {
                             selector.find(data).next()
                         {
                             if let Some(integer) = val.as_i64() {
-                                let msg = format!(
-                                    "# Got integer '{}' = '{}'",
-                                    key, val
-                                );
+                                let msg = format!("# Got integer '{key}' = '{val}'");
                                 info!("{}", truncate(&msg));
                                 out.insert(
                                     key.clone(),
@@ -61,7 +58,7 @@ pub fn extract_variables(data: &JsonValue, scope: &Table) -> Result<Table> {
 
                             for item_json in items {
                                 let mut toml_item = Table::new();
-                                for (name, selector) in value_selectors.iter() {
+                                for (name, selector) in &value_selectors {
                                     if let Some(v) =
                                         selector.find(item_json).next()
                                     {

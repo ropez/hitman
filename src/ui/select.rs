@@ -57,7 +57,7 @@ impl InteractiveComponent for RequestSelector {
     }
 }
 
-fn format_item<'a>(text: String, indexes: &[usize]) -> ListItem<'a> {
+fn format_item<'a>(text: &str, indexes: &[usize]) -> ListItem<'a> {
     // FIXME: Make '.http' part dark gray
     // For this, we need to implement SelectItem specifically for request paths
 
@@ -84,7 +84,7 @@ pub trait SelectItem {
     }
 
     fn render_highlighted<'a>(&self, highlight: &[usize]) -> ListItem<'a> {
-        format_item(self.text(), highlight)
+        format_item(&self.text(), highlight)
     }
 }
 
@@ -140,12 +140,10 @@ where
     }
 
     pub fn selected_item(&self) -> Option<&T> {
-        if let Some(i) = self.list_state.selected() {
+        self.list_state.selected().and_then(|i| {
             let filtered = &self.get_filtered_items();
             filtered.get(i).map(|&(i, _)| i)
-        } else {
-            None
-        }
+        })
     }
 
     pub fn select_next(&mut self) {
@@ -198,11 +196,8 @@ where
         self.get_filtered_items()
             .into_iter()
             .map(|(i, highlight)| {
-                if let Some(hl) = highlight {
-                    i.render_highlighted(&hl)
-                } else {
-                    i.render()
-                }
+                highlight
+                    .map_or_else(|| i.render(), |hl| i.render_highlighted(&hl))
             })
             .collect()
     }
@@ -321,15 +316,12 @@ where
     T: PromptSelectItem + Clone,
 {
     fn handle_prompt(&mut self, event: &Event) -> Option<PromptIntent> {
-        match self.handle_event(event) {
-            Some(intent) => match intent {
-                SelectIntent::Abort => Some(PromptIntent::Abort),
-                SelectIntent::Accept(item) => {
-                    Some(PromptIntent::Accept(item.to_value()))
-                }
-                SelectIntent::Change(_) => None,
-            },
-            None => None,
-        }
+        self.handle_event(event).and_then(|intent| match intent {
+            SelectIntent::Abort => Some(PromptIntent::Abort),
+            SelectIntent::Accept(item) => {
+                Some(PromptIntent::Accept(item.to_value()))
+            }
+            SelectIntent::Change(_) => None,
+        })
     }
 }

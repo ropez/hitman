@@ -35,6 +35,7 @@ pub fn mapkey(event: &Event) -> KeyMapping {
 fn mapkey_keypress(key: &KeyEvent) -> KeyMapping {
     use KeyCode::*;
 
+    #[allow(clippy::match_same_arms)]
     match (key.modifiers, key.code) {
         (KeyModifiers::NONE, Up) => KeyMapping::Up,
         (KeyModifiers::NONE, Down) => KeyMapping::Down,

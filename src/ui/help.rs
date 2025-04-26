@@ -17,7 +17,7 @@ impl Component for Help {
             .map(|(a, b)| Line::from(format!("{a:-14} {b}")))
             .collect();
 
-        let longest = lines.iter().map(|l| l.width()).max().unwrap_or(0);
+        let longest = lines.iter().map(Line::width).max().unwrap_or(0);
 
         let inner_area =
             centered(area, 4 + longest as u16, 2 + lines.len() as u16);

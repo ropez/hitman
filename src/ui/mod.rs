@@ -32,7 +32,7 @@ pub trait PromptComponent: Component {
     fn handle_prompt(&mut self, event: &Event) -> Option<PromptIntent>;
 }
 
-pub(crate) fn centered(area: Rect, w: u16, h: u16) -> Rect {
+pub fn centered(area: Rect, w: u16, h: u16) -> Rect {
     let vl = Layout::new(
         Direction::Vertical,
         [

@@ -20,7 +20,7 @@ pub struct DatePicker {
 
 impl DatePicker {
     pub fn new(title: String) -> Self {
-        DatePicker {
+        Self {
             title,
             selected: Local::now().date_naive(),
         }
@@ -114,7 +114,7 @@ impl Component for DatePicker {
             inner_layout[3].inner(Margin::new(1, 0)),
         );
 
-        let current = Line::from(format!("{}", date))
+        let current = Line::from(format!("{date}"))
             .alignment(Center)
             .style(Style::new().white());
         frame.render_widget(Paragraph::new(vec![current]), inner_layout[4]);

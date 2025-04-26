@@ -6,6 +6,7 @@ use reqwest::Url;
 use std::env::current_dir;
 use std::fs::{self, read_to_string};
 use std::path::{Path, PathBuf};
+use std::string::ToString;
 use toml::{Table as TomlTable, Value};
 use walkdir::WalkDir;
 
@@ -63,7 +64,7 @@ impl CookieStore for HitmanCookieJar {
 pub fn select_env(root_dir: &Path) -> Result<()> {
     let items = find_environments(root_dir)?;
 
-    let selected = Select::new("Select target", items.clone())
+    let selected = Select::new("Select target", items)
         .with_page_size(15)
         .with_scorer(&|filter, _, value, _| fuzzy_match(filter, value))
         .prompt()?;
@@ -104,7 +105,7 @@ pub fn find_environments(root_dir: &Path) -> Result<Vec<String>> {
         .keys()
         .filter(|k| !k.starts_with('_'))
         .filter(|k| config.get(*k).expect("key must exist").is_table())
-        .map(|k| k.to_string())
+        .map(ToString::to_string)
         .collect();
 
     Ok(keys)
@@ -137,13 +138,7 @@ pub fn load_env(
     let config = read_and_merge_config(root_dir)?;
 
     // Global defaults
-    env.extend(
-        config
-            .clone()
-            .into_iter()
-            .filter(|(_, v)| !v.is_table())
-            .collect::<Vec<_>>(),
-    );
+    env.extend(config.clone().into_iter().filter(|(_, v)| !v.is_table()));
 
     if let Some(Table(t)) = config.get(target) {
         env.extend(t.clone());
@@ -169,10 +164,8 @@ pub fn load_env(
 }
 
 pub fn get_target(root_dir: &Path) -> String {
-    let target = read_to_string(root_dir.join(TARGET_FILE))
-        .map(|t| t.trim().to_string())
-        .unwrap_or("default".to_string());
-    target
+    read_to_string(root_dir.join(TARGET_FILE))
+        .map_or_else(|_| "default".to_string(), |t| t.trim().to_string())
 }
 
 pub fn update_data(vars: &TomlTable) -> Result<()> {
@@ -186,7 +179,7 @@ pub fn update_data(vars: &TomlTable) -> Result<()> {
     };
     let data_file = root_dir.join(DATA_FILE);
 
-    let content = fs::read_to_string(&data_file).unwrap_or("".to_string());
+    let content = fs::read_to_string(&data_file).unwrap_or_else(|_| String::default());
 
     let mut state = toml::from_str::<TomlTable>(&content).unwrap_or_default();
 
@@ -237,14 +230,14 @@ fn read_toml(file_path: &Path) -> Result<TomlTable> {
 pub fn find_available_requests(cwd: &Path) -> Result<Vec<PathBuf>> {
     let files: Vec<_> = WalkDir::new(cwd)
         .into_iter()
-        .filter_map(|e| e.ok())
+        .filter_map(Result::ok)
         .filter(|e| {
             e.file_name().to_str().is_some_and(|s| {
                 // Ignore special _graphql.http file
                 s != "_graphql.http"
-                    && (s.ends_with(".http")
-                        || s.ends_with(".gql")
-                        || s.ends_with(".graphql"))
+                    && (s.to_lowercase().ends_with(".http")
+                        || s.to_lowercase().ends_with(".gql")
+                        || s.to_lowercase().ends_with(".graphql"))
             })
         })
         .map(|p| {
