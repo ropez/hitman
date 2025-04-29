@@ -30,7 +30,7 @@ use crate::{
 
 #[derive(Clone)]
 pub enum HitmanBody {
-    REST {
+    Plain {
         body: String,
     },
     GraphQL {
@@ -42,7 +42,7 @@ pub enum HitmanBody {
 impl Display for HitmanBody {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::REST { body } => write!(f, "{body}"),
+            Self::Plain { body } => write!(f, "{body}"),
             Self::GraphQL { body, variables } => match variables {
                 Some(v) => {
                     let vars = serde_json::to_string_pretty(&v)
@@ -59,7 +59,7 @@ impl Display for HitmanBody {
 impl HitmanBody {
     pub fn to_body(self) -> String {
         match self {
-            Self::REST { body } => body,
+            Self::Plain { body } => body,
             Self::GraphQL { body, variables } => variables.map_or_else(
                 || json!({"query": body}).to_string(),
                 |v| json!({"query": body, "variables": v}).to_string(),
