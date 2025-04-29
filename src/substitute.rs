@@ -13,7 +13,10 @@ use std::{
 use thiserror::Error;
 use toml::{Table, Value};
 
-use crate::request::{find_args, resolve_http_file, HitmanBody, HitmanRequest};
+use crate::{
+    request::{find_args, HitmanBody, HitmanRequest},
+    resolve::{resolve_path, Resolved},
+};
 
 #[derive(Error, Debug, Clone)]
 pub enum SubstituteError {
@@ -42,9 +45,9 @@ pub fn prepare_request(
     path: &Path,
     env: &Table,
 ) -> anyhow::Result<SubstituteResult<HitmanRequest>> {
-    let extension = path.extension().context("Couldn't get ext")?;
-    let http_file = resolve_http_file(path)?;
-    let input = read_to_string(&http_file)?;
+    let resolved = resolve_path(path)?;
+
+    let input = read_to_string(resolved.http_file())?;
     let buf = match substitute(&input, env) {
         Ok(buf) => buf,
         Err(e) => return Ok(Err(e)),
@@ -65,40 +68,41 @@ pub fn prepare_request(
 
     let mut map = HeaderMap::new();
 
-    let body = if extension == "gql" || extension == "graphql" {
-        let body = read_to_string(path)?;
-        let args = find_args(path)?;
-        let vars = match substitute_graphql(&args, env) {
-            Ok(vars) => vars,
-            Err(e) => return Ok(Err(e)),
-        };
+    let body = match &resolved {
+        Resolved::GraphQL { graphql_path, .. } => {
+            let body = read_to_string(graphql_path)?;
+            let args = find_args(graphql_path)?;
+            let vars = match substitute_graphql(&args, env) {
+                Ok(vars) => vars,
+                Err(e) => return Ok(Err(e)),
+            };
 
-        if vars.is_empty() {
-            Some(HitmanBody::GraphQL {
-                body,
-                variables: None,
-            })
-        } else {
-            let mut map: HashMap<String, String> = HashMap::new();
+            if vars.is_empty() {
+                Some(HitmanBody::GraphQL {
+                    body,
+                    variables: None,
+                })
+            } else {
+                let mut map: HashMap<String, String> = HashMap::new();
 
-            for (key, value) in args.into_iter().zip(vars.into_iter()) {
-                map.insert(key, value);
+                for (key, value) in args.into_iter().zip(vars.into_iter()) {
+                    map.insert(key, value);
+                }
+
+                let variables = serde_json::to_value(map)?;
+
+                Some(HitmanBody::GraphQL {
+                    body,
+                    variables: Some(variables),
+                })
             }
-
-            let variables = serde_json::to_value(map)?;
-
-            Some(HitmanBody::GraphQL {
-                body,
-                variables: Some(variables),
-            })
         }
-    } else {
-        match parse_result {
-            Complete(offset) => Some(HitmanBody::REST {
+        Resolved::Simple { .. } => match parse_result {
+            Complete(offset) => Some(HitmanBody::Plain {
                 body: buf[offset..].to_string(),
             }),
             Partial => None,
-        }
+        },
     };
 
     for header in req.headers {
@@ -287,7 +291,8 @@ mod tests {
     #[test]
     fn substitutes_default_value() {
         let env = create_env();
-        let err = substitute("foo: {{href | fallback.com }}\n", &env).unwrap_err();
+        let err =
+            substitute("foo: {{href | fallback.com }}\n", &env).unwrap_err();
 
         assert!(matches!(
             err,
