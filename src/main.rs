@@ -104,7 +104,13 @@ async fn main() -> Result<()> {
         }
     };
 
-    result.or_else(|e| if is_user_cancelation(&e) { Ok(()) } else { Err(e) })
+    result.or_else(|e| {
+        if is_user_cancelation(&e) {
+            Ok(())
+        } else {
+            Err(e)
+        }
+    })
 }
 
 fn is_user_cancelation(err: &anyhow::Error) -> bool {

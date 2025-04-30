@@ -5,8 +5,9 @@ use std::{env, path::Path, string::ToString};
 use toml::{Table, Value};
 
 use crate::{
+    replacer::Env,
     request::HitmanRequest,
-    substitute::{prepare_request, substitute, SubstituteError},
+    substitute::{prepare_request, SubstituteError},
 };
 
 fn set_boolean(name: &str, value: bool) {
@@ -52,7 +53,10 @@ pub fn prepare_request_interactive<I>(
 where
     I: UserInteraction + ?Sized,
 {
-    match prepare_request(path, env)? {
+    // TODO: Move this higher up
+    let replacer = Env::new(env.clone());
+
+    match prepare_request(path, &replacer)? {
         Ok(res) => Ok(res),
         Err(err) => {
             let (key, value) = match err {
@@ -72,38 +76,6 @@ where
             env.insert(key, Value::String(value));
 
             prepare_request_interactive(path, &env, interaction)
-        }
-    }
-}
-
-pub fn substitute_interactive<I>(
-    input: &str,
-    env: &Table,
-    interaction: &I,
-) -> Result<String>
-where
-    I: UserInteraction + ?Sized,
-{
-    match substitute(input, env) {
-        Ok(res) => Ok(res),
-        Err(err) => {
-            let (key, value) = match err {
-                SubstituteError::ValueNotFound { key, fallback } => {
-                    let value =
-                        interaction.prompt(&key, fallback.as_deref())?;
-                    (key, value)
-                }
-                SubstituteError::MultipleValuesFound { key, values } => {
-                    let value = interaction.select(&key, &values)?;
-                    (key, value)
-                }
-                e => bail!(e),
-            };
-
-            let mut env = env.clone();
-            env.insert(key, Value::String(value));
-
-            substitute_interactive(input, &env, interaction)
         }
     }
 }
