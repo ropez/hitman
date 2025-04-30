@@ -25,6 +25,7 @@ use hitman::{
         load_env, set_target, update_data,
     },
     extract::extract_variables,
+    replacer::Env,
     request::{build_client, do_request, resolve_http_file, HitmanRequest},
     substitute::{prepare_request, SubstituteError},
 };
@@ -348,6 +349,7 @@ impl App {
 
         let env = load_env(&root_dir, &self.target, &http_file, &options)?;
 
+        let env = Env::new(env);
         let intent = match prepare_request(&path, &env)? {
             Ok(prepared_request) => Some(Intent::SendRequest {
                 file_path,
@@ -381,6 +383,7 @@ impl App {
         if let Some(file_path) = file_path {
             let path = PathBuf::from(file_path.clone());
 
+            // TODO: Preview separate from output?
             // TODO: Highlight substitutions and current values
 
             let f = read_to_string(path)?;

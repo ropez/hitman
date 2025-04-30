@@ -11,7 +11,6 @@ use std::{
     str::{self, FromStr},
 };
 use thiserror::Error;
-use toml::{Table, Value};
 
 use crate::{
     request::{find_args, HitmanBody, HitmanRequest},
@@ -39,16 +38,24 @@ pub enum SubstituteError {
     TypeNotSupported,
 }
 
-type SubstituteResult<T> = std::result::Result<T, SubstituteError>;
+pub type SubstituteResult<T> = std::result::Result<T, SubstituteError>;
 
-pub fn prepare_request(
+pub trait Replacer {
+    fn find_replacement(
+        &self,
+        key: &str,
+        fallback: Option<&str>,
+    ) -> SubstituteResult<String>;
+}
+
+pub fn prepare_request<R: Replacer>(
     path: &Path,
-    env: &Table,
+    replacer: &R,
 ) -> anyhow::Result<SubstituteResult<HitmanRequest>> {
     let resolved = resolve_path(path)?;
 
     let input = read_to_string(resolved.http_file())?;
-    let buf = match substitute(&input, env) {
+    let buf = match substitute(&input, replacer) {
         Ok(buf) => buf,
         Err(e) => return Ok(Err(e)),
     };
@@ -72,7 +79,7 @@ pub fn prepare_request(
         Resolved::GraphQL { graphql_path, .. } => {
             let body = read_to_string(graphql_path)?;
             let args = find_args(graphql_path)?;
-            let vars = match substitute_graphql(&args, env) {
+            let vars = match substitute_graphql(&args, replacer) {
                 Ok(vars) => vars,
                 Err(e) => return Ok(Err(e)),
             };
@@ -125,31 +132,37 @@ pub fn prepare_request(
     }))
 }
 
-fn substitute_graphql(
+fn substitute_graphql<R: Replacer>(
     vars: &[String],
-    env: &Table,
+    replacer: &R,
 ) -> SubstituteResult<Vec<String>> {
     let mut output = vec![];
 
-    for line in vars {
-        output.push(find_replacement(line, env)?);
+    for key in vars {
+        output.push(replacer.find_replacement(key, None)?);
     }
 
     Ok(output)
 }
 
-pub fn substitute(input: &str, env: &Table) -> SubstituteResult<String> {
+pub fn substitute<R: Replacer>(
+    input: &str,
+    replacer: &R,
+) -> SubstituteResult<String> {
     let mut output = String::new();
 
     for line in input.lines() {
-        output.push_str(&substitute_line(line, env)?);
+        output.push_str(&substitute_line(line, replacer)?);
         output.push('\n');
     }
 
     Ok(output)
 }
 
-fn substitute_line(line: &str, env: &Table) -> SubstituteResult<String> {
+fn substitute_line<R: Replacer>(
+    line: &str,
+    replacer: &R,
+) -> SubstituteResult<String> {
     let mut output = String::new();
     let mut slice = line;
     loop {
@@ -169,10 +182,10 @@ fn substitute_line(line: &str, env: &Table) -> SubstituteResult<String> {
                     return Err(SubstituteError::SyntaxError);
                 };
 
-                let rep = find_replacement(&slice[2..end - 2], env)?;
+                let rep = substitute_inner(&slice[2..end - 2], replacer)?;
 
                 // Nested substitution
-                let rep = substitute_line(&rep, env)?;
+                let rep = substitute_line(&rep, replacer)?;
                 output.push_str(&rep);
 
                 slice = &slice[end..];
@@ -183,116 +196,102 @@ fn substitute_line(line: &str, env: &Table) -> SubstituteResult<String> {
     Ok(output)
 }
 
-// Only valid with ascii_alphabetic, ascii_digit or underscores in key name
-fn valid_character(c: &char) -> bool {
-    c.is_ascii_alphabetic() || c.is_ascii_digit() || *c == '_'
-}
-
-fn find_replacement(
-    placeholder: &str,
-    env: &Table,
+fn substitute_inner<R: Replacer>(
+    inner: &str,
+    replacer: &R,
 ) -> SubstituteResult<String> {
-    let mut parts = placeholder.split('|');
+    let mut parts = inner.split('|');
 
     let key = parts.next().unwrap_or("").trim();
     let parsed_key = key.chars().filter(valid_character).collect::<String>();
 
-    let parse = |v: &str| key.replace(&parsed_key, v);
+    let fallback = parts.next().map(str::trim);
 
-    match env.get(&parsed_key) {
-        Some(Value::String(v)) => Ok(parse(v)),
-        Some(Value::Integer(v)) => Ok(parse(&v.to_string())),
-        Some(Value::Float(v)) => Ok(parse(&v.to_string())),
-        Some(Value::Boolean(v)) => Ok(parse(&v.to_string())),
-        Some(Value::Array(arr)) => Err(SubstituteError::MultipleValuesFound {
-            key: parsed_key,
-            values: arr.clone(),
-        }),
-        Some(_) => Err(SubstituteError::TypeNotSupported),
-        None => {
-            let fallback = parts.next().map(|fb| fb.trim().to_string());
+    replacer
+        .find_replacement(&parsed_key, fallback)
+        .map(|v| key.replace(&parsed_key, &v))
+}
 
-            Err(SubstituteError::ValueNotFound {
-                key: parsed_key,
-                fallback,
-            })
-        }
-    }
+// Only valid with ascii_alphabetic, ascii_digit or underscores in key name
+fn valid_character(c: &char) -> bool {
+    c.is_ascii_alphabetic() || c.is_ascii_digit() || *c == '_'
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn create_env() -> Table {
-        toml::from_str(
-            r#"
-            url = "example.com"
-            token = "abc123"
-            integer = 42
-            float = 99.99
-            boolean = true
-            api_url1 = "foo.com"
+    struct MockReplacer;
 
-            nested = "the answer is {{integer}}"
-            "#,
-        )
-        .unwrap()
+    impl Replacer for MockReplacer {
+        fn find_replacement(
+            &self,
+            key: &str,
+            fallback: Option<&str>,
+        ) -> SubstituteResult<String> {
+            match key {
+                "url" => Ok("example.com".to_string()),
+                "token" => Ok("abc123".to_string()),
+                "integer" => Ok("42".to_string()),
+                "float" => Ok("99.99".to_string()),
+                "boolean" => Ok("true".to_string()),
+                "api_url1" => Ok("foo.com".to_string()),
+                "nested" => Ok("the answer is {{integer}}".to_string()),
+                _ => Err(SubstituteError::ValueNotFound {
+                    key: key.to_string(),
+                    fallback: fallback.map(ToString::to_string),
+                }),
+            }
+        }
     }
 
     #[test]
     fn returns_the_input_unchanged() {
-        let env = create_env();
-        let res = substitute("foo\nbar\n", &env).unwrap();
+        let res = substitute("foo\nbar\n", &MockReplacer).unwrap();
 
         assert_eq!(&res, "foo\nbar\n");
     }
 
     #[test]
     fn substitutes_single_variable() {
-        let env = create_env();
-        let res = substitute("foo {{url}}\nbar\n", &env).unwrap();
+        let res = substitute("foo {{url}}\nbar\n", &MockReplacer).unwrap();
 
         assert_eq!(&res, "foo example.com\nbar\n");
     }
 
     #[test]
     fn substitutes_integer() {
-        let env = create_env();
-        let res = substitute("foo={{integer}}", &env).unwrap();
+        let res = substitute("foo={{integer}}", &MockReplacer).unwrap();
 
         assert_eq!(&res, "foo=42\n");
     }
 
     #[test]
     fn substitutes_float() {
-        let env = create_env();
-        let res = substitute("foo={{float}}", &env).unwrap();
+        let res = substitute("foo={{float}}", &MockReplacer).unwrap();
 
         assert_eq!(&res, "foo=99.99\n");
     }
 
     #[test]
     fn substitutes_boolean() {
-        let env = create_env();
-        let res = substitute("foo: {{boolean}}", &env).unwrap();
+        let res = substitute("foo: {{boolean}}", &MockReplacer).unwrap();
 
         assert_eq!(&res, "foo: true\n");
     }
 
     #[test]
     fn substitutes_placeholder_with_default_value() {
-        let env = create_env();
-        let res = substitute("foo: {{url | fallback.com}}\n", &env).unwrap();
+        let res =
+            substitute("foo: {{url | fallback.com}}\n", &MockReplacer).unwrap();
 
         assert_eq!(&res, "foo: example.com\n");
     }
 
     #[test]
     fn substitutes_default_value() {
-        let env = create_env();
-        let err =
-            substitute("foo: {{href | fallback.com }}\n", &env).unwrap_err();
+        let err = substitute("foo: {{href | fallback.com }}\n", &MockReplacer)
+            .unwrap_err();
 
         assert!(matches!(
             err,
@@ -305,97 +304,90 @@ mod tests {
 
     #[test]
     fn substitutes_single_variable_with_speces() {
-        let env = create_env();
-        let res = substitute("foo {{ url  }}\nbar\n", &env).unwrap();
+        let res = substitute("foo {{ url  }}\nbar\n", &MockReplacer).unwrap();
 
         assert_eq!(&res, "foo example.com\nbar\n");
     }
 
     #[test]
     fn substitutes_one_variable_per_line() {
-        let env = create_env();
-        let res = substitute("foo {{url}}\nbar {{token}}\n", &env).unwrap();
+        let res =
+            substitute("foo {{url}}\nbar {{token}}\n", &MockReplacer).unwrap();
 
         assert_eq!(&res, "foo example.com\nbar abc123\n");
     }
 
     #[test]
     fn substitutes_variable_on_the_same_line() {
-        let env = create_env();
-        let res = substitute("foo {{url}}, bar {{token}}\n", &env).unwrap();
+        let res =
+            substitute("foo {{url}}, bar {{token}}\n", &MockReplacer).unwrap();
 
         assert_eq!(&res, "foo example.com, bar abc123\n");
     }
 
     #[test]
     fn substitutes_nested_variable() {
-        let env = create_env();
-        let res = substitute("# {{nested}}!\n", &env).unwrap();
+        let res = substitute("# {{nested}}!\n", &MockReplacer).unwrap();
 
         assert_eq!(&res, "# the answer is 42!\n");
     }
 
     #[test]
     fn substitutes_only_characters_inside_quotes() {
-        let env = create_env();
-        let res = substitute("foo: {{ \"boolean\" }}", &env).unwrap();
+        let res = substitute("foo: {{ \"boolean\" }}", &MockReplacer).unwrap();
 
         assert_eq!(&res, "foo: \"true\"\n");
     }
 
     #[test]
     fn substitutes_only_characters_inside_list() {
-        let env = create_env();
-        let res = substitute("foo: {{ [url] }}", &env).unwrap();
+        let res = substitute("foo: {{ [url] }}", &MockReplacer).unwrap();
 
         assert_eq!(&res, "foo: [example.com]\n");
     }
 
     #[test]
     fn substitutes_only_characters_inside_list_inside_quotes() {
-        let env = create_env();
-        let res = substitute("foo: {{ [\"url\"] }}", &env).unwrap();
+        let res = substitute("foo: {{ [\"url\"] }}", &MockReplacer).unwrap();
 
         assert_eq!(&res, "foo: [\"example.com\"]\n");
     }
 
     #[test]
     fn substitutes_variable_on_the_same_line_in_list() {
-        let env = create_env();
-        let res = substitute("foo: [{{ \"url\" }}, {{ \"integer\" }}]", &env)
-            .unwrap();
+        let res = substitute(
+            "foo: [{{ \"url\" }}, {{ \"integer\" }}]",
+            &MockReplacer,
+        )
+        .unwrap();
 
         assert_eq!(&res, "foo: [\"example.com\", \"42\"]\n");
     }
 
     #[test]
     fn substitutes_only_numbers_inside_quote() {
-        let env = create_env();
-        let res = substitute("foo: {{ \"integer\" }}", &env).unwrap();
+        let res = substitute("foo: {{ \"integer\" }}", &MockReplacer).unwrap();
 
         assert_eq!(&res, "foo: \"42\"\n");
     }
 
     #[test]
     fn substitutes_variable_with_underscore_and_number_in_name() {
-        let env = create_env();
-        let res = substitute("foo: {{ api_url1 }}", &env).unwrap();
+        let res = substitute("foo: {{ api_url1 }}", &MockReplacer).unwrap();
 
         assert_eq!(&res, "foo: foo.com\n");
     }
 
     #[test]
     fn fails_for_unmatched_open() {
-        let env = create_env();
-        let res = substitute("foo {{url\n", &env);
+        let res = substitute("foo {{url\n", &MockReplacer);
 
         assert!(res.is_err());
     }
 
     #[test]
     fn fails_for_unmatched_close() {
-        let env = create_env();
-        let res = substitute("foo url}} bar\n", &env);
+        let res = substitute("foo url}} bar\n", &MockReplacer);
 
         assert!(res.is_err());
     }

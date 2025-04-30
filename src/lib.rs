@@ -4,7 +4,9 @@ pub mod flurry;
 pub mod monitor;
 pub mod request;
 pub mod resolve;
+pub mod replacer;
 pub mod substitute;
 pub mod util;
 
 pub mod prompt;
+
