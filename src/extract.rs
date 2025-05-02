@@ -2,15 +2,14 @@ use anyhow::{anyhow, bail, Result};
 use log::info;
 use toml::{Table, Value};
 
-use crate::util::truncate;
+use crate::{scope::Scope, util::truncate};
 use jsonpath::Selector;
 use serde_json::Value as JsonValue;
 
-pub fn extract_variables(data: &JsonValue, scope: &Table) -> Result<Table> {
+pub fn extract_variables(data: &JsonValue, scope: &Scope) -> Result<Table> {
     let mut out = Table::new();
 
-    let extract = scope.get("_extract");
-    match extract {
+    match scope.extract() {
         Some(Value::Table(table)) => {
             for (key, value) in table {
                 match value {
@@ -20,8 +19,7 @@ pub fn extract_variables(data: &JsonValue, scope: &Table) -> Result<Table> {
                         if let Some(JsonValue::String(val)) =
                             selector.find(data).next()
                         {
-                            let msg =
-                                format!("# Got string '{key}' = '{val}'");
+                            let msg = format!("# Got string '{key}' = '{val}'");
                             info!("{}", truncate(&msg));
 
                             out.insert(
@@ -33,7 +31,8 @@ pub fn extract_variables(data: &JsonValue, scope: &Table) -> Result<Table> {
                             selector.find(data).next()
                         {
                             if let Some(integer) = val.as_i64() {
-                                let msg = format!("# Got integer '{key}' = '{val}'");
+                                let msg =
+                                    format!("# Got integer '{key}' = '{val}'");
                                 info!("{}", truncate(&msg));
                                 out.insert(
                                     key.clone(),
@@ -129,7 +128,7 @@ mod tests {
 
     #[test]
     fn extracts_variables_from_json() {
-        let env = toml::from_str(
+        let scope = toml::from_str::<Table>(
             r#"
         url = "example.com"
 
@@ -137,7 +136,8 @@ mod tests {
         token = "$.Data.Token"
         "#,
         )
-        .unwrap();
+        .unwrap()
+        .into();
 
         let data = serde_json::from_str(
             r#"{
@@ -146,7 +146,7 @@ mod tests {
         )
         .unwrap();
 
-        let res = extract_variables(&data, &env).unwrap();
+        let res = extract_variables(&data, &scope).unwrap();
 
         assert!(res.get("token").is_some());
         assert_eq!(
@@ -158,7 +158,7 @@ mod tests {
     #[test]
     fn extracts_multiple_values_into_array() {
         // workaround: Jsonpath crate doesn't support array
-        let env = toml::from_str(
+        let scope = toml::from_str::<Table>(
             r#"
         url = "example.com"
 
@@ -166,7 +166,8 @@ mod tests {
         ToolId = { _ = "$.Tools", value = "$.ToolId", name = "$.Name" }
         "#,
         )
-        .unwrap();
+        .unwrap()
+        .into();
 
         let data = serde_json::from_str(
             r#"{
@@ -177,7 +178,7 @@ mod tests {
         }"#,
         )
         .unwrap();
-        let res = extract_variables(&data, &env).unwrap();
+        let res = extract_variables(&data, &scope).unwrap();
 
         let expected: Table = toml::from_str(
             r#"

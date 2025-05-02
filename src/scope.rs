@@ -2,7 +2,7 @@ use anyhow::bail;
 use toml::{Table, Value};
 
 #[derive(Clone)]
-pub struct Env(Table);
+pub struct Scope(Table);
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Replacement {
@@ -18,17 +18,13 @@ pub enum Replacement {
     },
 }
 
-impl From<Table> for Env {
+impl From<Table> for Scope {
     fn from(env: Table) -> Self {
         Self(env)
     }
 }
 
-impl Env {
-    pub fn update(&mut self, key: String, value: String) {
-        self.0.insert(key, value.into());
-    }
-
+impl Scope {
     pub fn lookup(&self, key: &str) -> anyhow::Result<Replacement> {
         let rep = match self.0.get(key) {
             None => Replacement::ValueNotFound { key: key.into() },
@@ -45,13 +41,17 @@ impl Env {
 
         Ok(rep)
     }
+
+    pub fn extract(&self) -> Option<&Value> {
+        self.0.get("_extract")
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn create_env() -> Env {
+    fn create_env() -> Scope {
         toml::from_str::<Table>(
             r#"
             url = "example.com"

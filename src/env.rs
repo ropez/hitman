@@ -11,6 +11,7 @@ use toml::{Table as TomlTable, Value};
 use walkdir::WalkDir;
 
 use crate::prompt::fuzzy_match;
+use crate::scope::Scope;
 
 const CONFIG_FILE: &str = "hitman.toml";
 const LOCAL_CONFIG_FILE: &str = "hitman.local.toml";
@@ -130,37 +131,37 @@ pub fn load_env(
     target: &str,
     file_path: &Path,
     options: &[(String, String)],
-) -> Result<TomlTable> {
+) -> Result<Scope> {
     use Value::Table;
 
-    let mut env = TomlTable::new();
+    let mut table = TomlTable::new();
 
     let config = read_and_merge_config(root_dir)?;
 
     // Global defaults
-    env.extend(config.clone().into_iter().filter(|(_, v)| !v.is_table()));
+    table.extend(config.clone().into_iter().filter(|(_, v)| !v.is_table()));
 
     if let Some(Table(t)) = config.get(target) {
-        env.extend(t.clone());
+        table.extend(t.clone());
     } else {
         bail!("`{}` not found in config", target);
     }
 
     if let Ok(content) = read_toml(&file_path.with_extension("http.toml")) {
-        env.extend(content);
+        table.extend(content);
     }
 
     // FIXME state per environment
     if let Ok(content) = read_toml(&root_dir.join(DATA_FILE)) {
-        env.extend(content);
+        table.extend(content);
     }
 
     // Extra values passed on the command line
     for (k, v) in options {
-        env.insert(k.clone(), Value::String(v.clone()));
+        table.insert(k.clone(), Value::String(v.clone()));
     }
 
-    Ok(env)
+    Ok(table.into())
 }
 
 pub fn get_target(root_dir: &Path) -> String {

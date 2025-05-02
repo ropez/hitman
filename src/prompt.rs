@@ -5,10 +5,13 @@ use std::{collections::HashMap, env, path::Path, string::ToString};
 use toml::Value;
 
 use crate::{
-    replacer::{Env, Replacement}, request::HitmanRequest, resolve::resolve_path, substitute::{
+    scope::{Scope, Replacement},
+    request::HitmanRequest,
+    resolve::resolve_path,
+    substitute::{
         prepare_request,
         Substitution::{Complete, ValueMissing},
-    }
+    },
 };
 
 fn set_boolean(name: &str, value: bool) {
@@ -48,7 +51,7 @@ pub trait UserInteraction {
 
 pub fn prepare_request_interactive<I>(
     path: &Path,
-    env: &Env,
+    scope: &Scope,
     interaction: &I,
 ) -> Result<HitmanRequest>
 where
@@ -62,7 +65,7 @@ where
         match prepare_request(&resolved, &vars)? {
             Complete(req) => return Ok(req),
             ValueMissing { key, fallback } => {
-                let value = match env.lookup(&key)? {
+                let value = match scope.lookup(&key)? {
                     Replacement::Value(value) => value,
                     Replacement::ValueNotFound { key } => {
                         interaction.prompt(&key, fallback.as_deref())?

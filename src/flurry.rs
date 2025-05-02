@@ -2,21 +2,21 @@ use anyhow::{bail, Result};
 use futures::future::join_all;
 use log::warn;
 use spinoff::{spinners, Color, Spinner, Streams};
-use toml::Table;
-
-use std::path::Path;
-use std::time::Duration;
+use std::{path::Path, time::Duration};
 use tokio::spawn;
 
-use crate::prompt::{get_interaction, prepare_request_interactive};
-use crate::request::{build_client, do_request};
-use crate::util::{split_work, IterExt};
+use crate::{
+    prompt::{get_interaction, prepare_request_interactive},
+    scope::Scope,
+    request::{build_client, do_request},
+    util::{split_work, IterExt},
+};
 
 pub async fn flurry_attack(
     file_path: &Path,
     flurry_size: i32,
     connections: i32,
-    env: &Table,
+    scope: &Scope,
 ) -> Result<()> {
     if flurry_size < 1 {
         bail!("Flurry size must be at least 1");
@@ -31,7 +31,7 @@ pub async fn flurry_attack(
 
     let interaction = get_interaction();
     let req =
-        prepare_request_interactive(file_path, &env.clone().into(), interaction.as_ref())?;
+        prepare_request_interactive(file_path, scope, interaction.as_ref())?;
 
     let t = std::time::Instant::now();
     let mut spinner = Spinner::new_with_stream(
@@ -73,8 +73,8 @@ pub async fn flurry_attack(
     spinner.stop();
     let elapsed = t.elapsed();
 
-    let average =
-        results.iter().map(|(_, d)| d).sum::<Duration>() / u32::try_from(results.len())?;
+    let average = results.iter().map(|(_, d)| d).sum::<Duration>()
+        / u32::try_from(results.len())?;
 
     let statuses = results.iter().map(|(s, _)| s).counted();
     let statuses = statuses
