@@ -1,10 +1,10 @@
 use anyhow::{bail, Result};
 use log::warn;
 use tokio::time::sleep;
+use toml::Table;
 
 use std::path::Path;
 use std::time::Duration;
-use toml::Table;
 
 use crate::prompt::{get_interaction, prepare_request_interactive};
 use crate::request::{build_client, do_request};
@@ -23,8 +23,11 @@ pub async fn monitor(
     warn!("# Repeating every {delay} seconds, until interrupted...");
 
     let interaction = get_interaction();
-    let req =
-        prepare_request_interactive(file_path, env, interaction.as_ref())?;
+    let req = prepare_request_interactive(
+        file_path,
+        &env.clone().into(),
+        interaction.as_ref(),
+    )?;
 
     loop {
         let res = do_request(&client, &req).await;
