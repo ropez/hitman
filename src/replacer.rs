@@ -1,43 +1,49 @@
+use anyhow::bail;
 use toml::{Table, Value};
 
-use crate::substitute::{Replacer, SubstituteError, SubstituteResult};
-
+#[derive(Clone)]
 pub struct Env(Table);
 
-// TODO: Incorporate "UserInteraction" into this
-//
-// For UI, we need to drive the whole substitution process in a async task,
-// and use a channel to request input from the main thread.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Replacement {
+    Value(String),
 
-impl Env {
-    pub fn new(env: Table) -> Self {
+    ValueNotFound {
+        key: String,
+    },
+
+    MultipleValuesFound {
+        key: String,
+        values: Vec<toml::Value>,
+    },
+}
+
+impl From<Table> for Env {
+    fn from(env: Table) -> Self {
         Self(env)
     }
 }
 
-impl Replacer for Env {
-    fn find_replacement(
-        &self,
-        key: &str,
-        fallback: Option<&str>,
-    ) -> SubstituteResult<String> {
-        match self.0.get(key) {
-            Some(Value::String(v)) => Ok(v.clone()),
-            Some(Value::Integer(v)) => Ok(v.to_string()),
-            Some(Value::Float(v)) => Ok(v.to_string()),
-            Some(Value::Boolean(v)) => Ok(v.to_string()),
-            Some(Value::Array(arr)) => {
-                Err(SubstituteError::MultipleValuesFound {
-                    key: key.into(),
-                    values: arr.clone(),
-                })
-            }
-            Some(_) => Err(SubstituteError::TypeNotSupported),
-            None => Err(SubstituteError::ValueNotFound {
+impl Env {
+    pub fn update(&mut self, key: String, value: String) {
+        self.0.insert(key, value.into());
+    }
+
+    pub fn lookup(&self, key: &str) -> anyhow::Result<Replacement> {
+        let rep = match self.0.get(key) {
+            None => Replacement::ValueNotFound { key: key.into() },
+            Some(Value::String(v)) => Replacement::Value(v.clone()),
+            Some(Value::Integer(v)) => Replacement::Value(v.to_string()),
+            Some(Value::Float(v)) => Replacement::Value(v.to_string()),
+            Some(Value::Boolean(v)) => Replacement::Value(v.to_string()),
+            Some(Value::Array(arr)) => Replacement::MultipleValuesFound {
                 key: key.into(),
-                fallback: fallback.map(ToString::to_string),
-            }),
-        }
+                values: arr.clone(),
+            },
+            Some(_) => bail!("Type not supported"),
+        };
+
+        Ok(rep)
     }
 }
 
@@ -45,8 +51,8 @@ impl Replacer for Env {
 mod tests {
     use super::*;
 
-    fn create_env() -> Table {
-        toml::from_str(
+    fn create_env() -> Env {
+        toml::from_str::<Table>(
             r#"
             url = "example.com"
             token = "abc123"
@@ -56,59 +62,69 @@ mod tests {
             api_url1 = "foo.com"
 
             nested = "the answer is {{integer}}"
+            multiple = ["a", "b", "c"]
             "#,
         )
         .unwrap()
+        .into()
     }
 
     #[test]
     fn finds_variable() {
-        let rep = Env::new(create_env());
-        let res = rep.find_replacement("url", None).unwrap();
+        let rep = create_env();
+        let res = rep.lookup("url").unwrap();
 
-        assert_eq!(&res, "example.com");
+        assert_eq!(res, Replacement::Value("example.com".into()));
     }
 
     #[test]
     fn finds_integer() {
-        let rep = Env::new(create_env());
-        let res = rep.find_replacement("integer", None).unwrap();
+        let rep = create_env();
+        let res = rep.lookup("integer").unwrap();
 
-        assert_eq!(&res, "42");
+        assert_eq!(res, Replacement::Value("42".into()));
     }
 
     #[test]
     fn finds_float() {
-        let rep = Env::new(create_env());
-        let res = rep.find_replacement("float", None).unwrap();
+        let rep = create_env();
+        let res = rep.lookup("float").unwrap();
 
-        assert_eq!(&res, "99.99");
+        assert_eq!(res, Replacement::Value("99.99".into()));
     }
 
     #[test]
     fn finds_boolean() {
-        let rep = Env::new(create_env());
-        let res = rep.find_replacement("boolean", None).unwrap();
+        let rep = create_env();
+        let res = rep.lookup("boolean").unwrap();
 
-        assert_eq!(&res, "true");
+        assert_eq!(res, Replacement::Value("true".into()));
     }
 
     #[test]
-    fn returns_fallback_for_missing() {
-        let rep = Env::new(create_env());
-        let err = rep.find_replacement("missing", Some("foobar")).unwrap_err();
+    fn fails_for_multiple() {
+        let rep = create_env();
+        let res = rep.lookup("multiple").unwrap();
 
-        assert!(matches!(err, SubstituteError::ValueNotFound {
-            key,
-            fallback: Some(fb)
-        } if key == "missing" && fb == "foobar" ));
+        assert_eq!(
+            res,
+            Replacement::MultipleValuesFound {
+                key: "multiple".into(),
+                values: vec!["a".into(), "b".into(), "c".into()]
+            }
+        );
     }
 
     #[test]
     fn fails_for_missing() {
-        let rep = Env::new(create_env());
-        let res = rep.find_replacement("missing", None);
+        let rep = create_env();
+        let res = rep.lookup("missing").unwrap();
 
-        assert!(res.is_err());
+        assert_eq!(
+            res,
+            Replacement::ValueNotFound {
+                key: "missing".into()
+            }
+        );
     }
 }

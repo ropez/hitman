@@ -114,8 +114,11 @@ pub async fn make_request(file_path: &Path, env: &Table) -> Result<()> {
 
     let interaction = get_interaction();
 
-    let req =
-        prepare_request_interactive(file_path, env, interaction.as_ref())?;
+    let req = prepare_request_interactive(
+        file_path,
+        &env.clone().into(),
+        interaction.as_ref(),
+    )?;
 
     clear_screen();
     print_request(&req);

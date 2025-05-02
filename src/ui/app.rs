@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     fmt::Write,
     fs::read_to_string,
     io,
@@ -25,9 +26,13 @@ use hitman::{
         load_env, set_target, update_data,
     },
     extract::extract_variables,
-    replacer::Env,
+    replacer::{Env, Replacement},
     request::{build_client, do_request, resolve_http_file, HitmanRequest},
-    substitute::{prepare_request, SubstituteError},
+    resolve::resolve_path,
+    substitute::{
+        prepare_request,
+        Substitution::{Complete, ValueMissing},
+    },
 };
 
 use super::{
@@ -73,7 +78,7 @@ pub enum AppState {
     PendingValue {
         file_path: String,
         key: String,
-        pending_options: Vec<(String, String)>,
+        pending_vars: HashMap<String, String>,
         component: Box<dyn PromptComponent>,
     },
 
@@ -97,11 +102,14 @@ pub enum Intent {
     ShowHelp,
     Update(Option<String>),
     PreviewRequest(Option<String>),
-    PrepareRequest(String, Vec<(String, String)>),
+    PrepareRequest {
+        file_path: String,
+        vars: HashMap<String, String>,
+    },
     AskForValue {
         key: String,
         file_path: String,
-        pending_options: Vec<(String, String)>,
+        pending_vars: HashMap<String, String>,
         params: AskForValueParams,
     },
     SendRequest {
@@ -193,8 +201,8 @@ impl App {
 
                 return Ok(Some(PreviewRequest(selected)));
             }
-            PrepareRequest(file_path, options) => {
-                return self.try_request(file_path, options);
+            PrepareRequest { file_path, vars } => {
+                return self.try_request(file_path, vars);
             }
             PreviewRequest(file_path) => {
                 self.preview_request(file_path)?;
@@ -212,7 +220,7 @@ impl App {
             AskForValue {
                 key,
                 file_path,
-                pending_options,
+                pending_vars,
                 params,
             } => {
                 let component: Box<dyn PromptComponent> = match params {
@@ -248,7 +256,7 @@ impl App {
                 self.set_state(AppState::PendingValue {
                     key,
                     file_path,
-                    pending_options,
+                    pending_vars,
                     component,
                 });
             }
@@ -339,41 +347,49 @@ impl App {
     fn try_request(
         &self,
         file_path: String,
-        options: Vec<(String, String)>,
+        mut vars: HashMap<String, String>,
     ) -> Result<Option<Intent>> {
         let root_dir = self.root_dir.clone();
+
+        // FIXME Call resolve_path and load_env once, and keep result in state
 
         let path = PathBuf::from(file_path.clone());
 
         let http_file = resolve_http_file(&path)?;
 
-        let env = load_env(&root_dir, &self.target, &http_file, &options)?;
-
-        let env = Env::new(env);
-        let intent = match prepare_request(&path, &env)? {
-            Ok(prepared_request) => Some(Intent::SendRequest {
+        let resolved = resolve_path(&path)?;
+        let intent = match prepare_request(&resolved, &vars)? {
+            Complete(prepared_request) => Some(Intent::SendRequest {
                 file_path,
                 prepared_request,
             }),
-            Err(err) => match err {
-                SubstituteError::MultipleValuesFound { key, values } => {
-                    Some(Intent::AskForValue {
-                        key,
-                        file_path,
-                        pending_options: options,
-                        params: AskForValueParams::Select { values },
-                    })
+            ValueMissing { key, fallback } => {
+                let env = load_env(&root_dir, &self.target, &http_file, &[])?;
+                let env = Env::from(env);
+
+                match env.lookup(&key)? {
+                    Replacement::Value(value) => {
+                        vars.insert(key, value);
+                        Some(Intent::PrepareRequest { file_path, vars })
+                    }
+                    Replacement::MultipleValuesFound { key, values } => {
+                        Some(Intent::AskForValue {
+                            key,
+                            file_path,
+                            pending_vars: vars,
+                            params: AskForValueParams::Select { values },
+                        })
+                    }
+                    Replacement::ValueNotFound { key } => {
+                        Some(Intent::AskForValue {
+                            key,
+                            file_path,
+                            pending_vars: vars,
+                            params: AskForValueParams::Prompt { fallback },
+                        })
+                    }
                 }
-                SubstituteError::ValueNotFound { key, fallback } => {
-                    Some(Intent::AskForValue {
-                        key,
-                        file_path,
-                        pending_options: options,
-                        params: AskForValueParams::Prompt { fallback },
-                    })
-                }
-                other_err => Some(Intent::ShowError(other_err.to_string())),
-            },
+            }
         };
 
         Ok(intent)
@@ -462,7 +478,7 @@ impl InteractiveComponent for App {
                     AppState::PendingValue {
                         key,
                         file_path,
-                        pending_options,
+                        pending_vars,
                         component,
                         ..
                     } => {
@@ -472,11 +488,11 @@ impl InteractiveComponent for App {
                                     return Some(Abort);
                                 }
                                 PromptIntent::Accept(value) => {
-                                    pending_options.push((key.clone(), value));
-                                    return Some(PrepareRequest(
-                                        file_path.clone(),
-                                        pending_options.clone(),
-                                    ));
+                                    pending_vars.insert(key.clone(), value);
+                                    return Some(PrepareRequest {
+                                        file_path: file_path.clone(),
+                                        vars: pending_vars.clone(),
+                                    });
                                 }
                             }
                         }
@@ -497,10 +513,10 @@ impl InteractiveComponent for App {
                             match intent {
                                 SelectIntent::Abort => (),
                                 SelectIntent::Accept(file_path) => {
-                                    return Some(PrepareRequest(
+                                    return Some(PrepareRequest{
                                         file_path,
-                                        Vec::new(),
-                                    ));
+                                        vars: HashMap::new(),
+                                    });
                                 }
                                 SelectIntent::Change(file_path) => {
                                     return Some(PreviewRequest(file_path));

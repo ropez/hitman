@@ -1,13 +1,14 @@
 use anyhow::{bail, Result};
 use fuzzy_matcher::skim::SkimMatcherV2;
 use inquire::{list_option::ListOption, DateSelect, Select, Text};
-use std::{env, path::Path, string::ToString};
-use toml::{Table, Value};
+use std::{collections::HashMap, env, path::Path, string::ToString};
+use toml::Value;
 
 use crate::{
-    replacer::Env,
-    request::HitmanRequest,
-    substitute::{prepare_request, SubstituteError},
+    replacer::{Env, Replacement}, request::HitmanRequest, resolve::resolve_path, substitute::{
+        prepare_request,
+        Substitution::{Complete, ValueMissing},
+    }
 };
 
 fn set_boolean(name: &str, value: bool) {
@@ -47,35 +48,32 @@ pub trait UserInteraction {
 
 pub fn prepare_request_interactive<I>(
     path: &Path,
-    env: &Table,
+    env: &Env,
     interaction: &I,
 ) -> Result<HitmanRequest>
 where
     I: UserInteraction + ?Sized,
 {
-    // TODO: Move this higher up
-    let replacer = Env::new(env.clone());
+    let mut vars = HashMap::new();
 
-    match prepare_request(path, &replacer)? {
-        Ok(res) => Ok(res),
-        Err(err) => {
-            let (key, value) = match err {
-                SubstituteError::ValueNotFound { key, fallback } => {
-                    let value =
-                        interaction.prompt(&key, fallback.as_deref())?;
-                    (key, value)
-                }
-                SubstituteError::MultipleValuesFound { key, values } => {
-                    let value = interaction.select(&key, &values)?;
-                    (key, value)
-                }
-                e => bail!(e),
-            };
+    let resolved = resolve_path(path)?;
 
-            let mut env = env.clone();
-            env.insert(key, Value::String(value));
+    loop {
+        match prepare_request(&resolved, &vars)? {
+            Complete(req) => return Ok(req),
+            ValueMissing { key, fallback } => {
+                let value = match env.lookup(&key)? {
+                    Replacement::Value(value) => value,
+                    Replacement::ValueNotFound { key } => {
+                        interaction.prompt(&key, fallback.as_deref())?
+                    }
+                    Replacement::MultipleValuesFound { key, values } => {
+                        interaction.select(&key, &values)?
+                    }
+                };
 
-            prepare_request_interactive(path, &env, interaction)
+                vars.insert(key, value);
+            }
         }
     }
 }

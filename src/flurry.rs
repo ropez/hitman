@@ -2,11 +2,11 @@ use anyhow::{bail, Result};
 use futures::future::join_all;
 use log::warn;
 use spinoff::{spinners, Color, Spinner, Streams};
+use toml::Table;
 
 use std::path::Path;
 use std::time::Duration;
 use tokio::spawn;
-use toml::Table;
 
 use crate::prompt::{get_interaction, prepare_request_interactive};
 use crate::request::{build_client, do_request};
@@ -31,7 +31,7 @@ pub async fn flurry_attack(
 
     let interaction = get_interaction();
     let req =
-        prepare_request_interactive(file_path, env, interaction.as_ref())?;
+        prepare_request_interactive(file_path, &env.clone().into(), interaction.as_ref())?;
 
     let t = std::time::Instant::now();
     let mut spinner = Spinner::new_with_stream(
