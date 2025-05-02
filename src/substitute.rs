@@ -15,7 +15,7 @@ use crate::{
     resolve::Resolved,
 };
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum Substitution<T> {
     Complete(T),
     ValueMissing {
@@ -30,6 +30,12 @@ pub fn prepare_request(
     resolved: &Resolved,
     vars: &HashMap<String, String>,
 ) -> anyhow::Result<Substitution<HitmanRequest>> {
+    // FIXME This is still doing too much:
+    // - Substituting placeholders in the raw input text
+    // - Parsing the result as HTTP, yielding method, url, headers and body
+    // - Loading and parsing GraphQL
+    // - Generating variables for GraphQL (quite different for raw text substitution)
+
     let input = read_to_string(resolved.http_file())?;
     let buf = match substitute(&input, vars)? {
         Complete(buf) => buf,
@@ -38,8 +44,8 @@ pub fn prepare_request(
         }
     };
 
-    let mut headers = [httparse::EMPTY_HEADER; 64];
-    let mut req = httparse::Request::new(&mut headers);
+    let mut headers_buf = [httparse::EMPTY_HEADER; 64];
+    let mut req = httparse::Request::new(&mut headers_buf);
 
     let parse_result = req
         .parse(buf.as_bytes())
@@ -50,8 +56,6 @@ pub fn prepare_request(
 
     let method = Method::from_str(method)?;
     let url = Url::parse(url)?;
-
-    let mut map = HeaderMap::new();
 
     let body = match &resolved {
         Resolved::GraphQL { graphql_path, .. } => {
@@ -93,6 +97,8 @@ pub fn prepare_request(
         },
     };
 
+    let mut headers = HeaderMap::new();
+
     for header in req.headers {
         // The parse_http crate is weird, it fills the array with empty headers
         // if a partial request is parsed.
@@ -102,11 +108,11 @@ pub fn prepare_request(
         let value = str::from_utf8(header.value)?;
         let header_name = HeaderName::from_str(header.name)?;
         let header_value = HeaderValue::from_str(value)?;
-        map.insert(header_name, header_value);
+        headers.insert(header_name, header_value);
     }
 
     Ok(Complete(HitmanRequest {
-        headers: map,
+        headers,
         url,
         method,
         body,

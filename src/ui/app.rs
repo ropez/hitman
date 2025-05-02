@@ -26,9 +26,9 @@ use hitman::{
         load_env, set_target, update_data,
     },
     extract::extract_variables,
-    replacer::{Env, Replacement},
     request::{build_client, do_request, resolve_http_file, HitmanRequest},
     resolve::resolve_path,
+    scope::Replacement,
     substitute::{
         prepare_request,
         Substitution::{Complete, ValueMissing},
@@ -364,10 +364,9 @@ impl App {
                 prepared_request,
             }),
             ValueMissing { key, fallback } => {
-                let env = load_env(&root_dir, &self.target, &http_file, &[])?;
-                let env = Env::from(env);
+                let scope = load_env(&root_dir, &self.target, &http_file, &[])?;
 
-                match env.lookup(&key)? {
+                match scope.lookup(&key)? {
                     Replacement::Value(value) => {
                         vars.insert(key, value);
                         Some(Intent::PrepareRequest { file_path, vars })
@@ -513,7 +512,7 @@ impl InteractiveComponent for App {
                             match intent {
                                 SelectIntent::Abort => (),
                                 SelectIntent::Accept(file_path) => {
-                                    return Some(PrepareRequest{
+                                    return Some(PrepareRequest {
                                         file_path,
                                         vars: HashMap::new(),
                                     });
@@ -714,7 +713,7 @@ async fn do_make_request(
 ) -> Result<(HttpMessage, Duration)> {
     let client = build_client()?;
     let options = vec![];
-    let env = load_env(root_dir, &target, file_path, &options)?;
+    let scope = load_env(root_dir, &target, file_path, &options)?;
 
     let (res, elapsed) = do_request(&client, &req).await?;
 
@@ -733,7 +732,7 @@ async fn do_make_request(
     if let Ok(json) = res.json::<serde_json::Value>().await {
         writeln!(response.body, "{}", serde_json::to_string_pretty(&json)?)?;
 
-        let vars = extract_variables(&json, &env)?;
+        let vars = extract_variables(&json, &scope)?;
         update_data(&vars)?;
     }
 

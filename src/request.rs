@@ -1,3 +1,12 @@
+use std::{
+    fmt::{Display, Write},
+    io::IsTerminal,
+    path::{Path, PathBuf},
+    str::{self, FromStr},
+    sync::Arc,
+    time::Duration,
+};
+
 use anyhow::{anyhow, bail, Context, Result};
 use futures::StreamExt;
 use graphql_parser::query::{
@@ -11,20 +20,12 @@ use reqwest::{
 };
 use serde_json::{json, Value};
 use spinoff::{spinners, Color, Spinner, Streams};
-use std::{
-    fmt::{Display, Write},
-    io::IsTerminal,
-    path::{Path, PathBuf},
-    str::{self, FromStr},
-    sync::Arc,
-    time::Duration,
-};
-use toml::Table;
 
 use crate::{
     env::{update_data, HitmanCookieJar},
     extract::extract_variables,
     prompt::{get_interaction, prepare_request_interactive},
+    scope::Scope,
     util::truncate,
 };
 
@@ -109,16 +110,13 @@ pub fn build_client() -> Result<Client> {
     Ok(client)
 }
 
-pub async fn make_request(file_path: &Path, env: &Table) -> Result<()> {
+pub async fn make_request(file_path: &Path, scope: &Scope) -> Result<()> {
     let client = build_client()?;
 
     let interaction = get_interaction();
 
-    let req = prepare_request_interactive(
-        file_path,
-        &env.clone().into(),
-        interaction.as_ref(),
-    )?;
+    let req =
+        prepare_request_interactive(file_path, scope, interaction.as_ref())?;
 
     clear_screen();
     print_request(&req);
@@ -143,7 +141,7 @@ pub async fn make_request(file_path: &Path, env: &Table) -> Result<()> {
 
     if let Ok(json) = response.json::<Value>().await {
         println!("{}", serde_json::to_string_pretty(&json)?);
-        let vars = extract_variables(&json, env)?;
+        let vars = extract_variables(&json, scope)?;
         update_data(&vars)?;
     }
 

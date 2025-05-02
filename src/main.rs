@@ -48,17 +48,17 @@ async fn main() -> Result<()> {
         let file_path = cwd.join(file_path);
 
         if let Some(flurry_size) = args.flurry {
-            let env = load_env(&root_dir, &target, &file_path, &args.options)?;
+            let scope = load_env(&root_dir, &target, &file_path, &args.options)?;
             flurry_attack(
                 &file_path,
                 flurry_size,
                 args.connections.unwrap_or(10),
-                &env,
+                &scope,
             )
             .await
         } else if let Some(delay_seconds) = args.monitor {
-            let env = load_env(&root_dir, &target, &file_path, &args.options)?;
-            monitor(&file_path, delay_seconds, &env).await
+            let scope = load_env(&root_dir, &target, &file_path, &args.options)?;
+            monitor(&file_path, delay_seconds, &scope).await
         } else {
             let res =
                 run_once(&root_dir, &target, &file_path, &args.options).await;
@@ -127,9 +127,9 @@ async fn run_once(
     file_path: &Path,
     options: &[(String, String)],
 ) -> Result<()> {
-    let env = load_env(root_dir, target, file_path, options)?;
+    let scope = load_env(root_dir, target, file_path, options)?;
 
-    make_request(file_path, &env).await
+    make_request(file_path, &scope).await
 }
 
 async fn watch_mode(
