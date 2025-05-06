@@ -2,17 +2,17 @@ use anyhow::{bail, Result};
 use log::warn;
 use tokio::time::sleep;
 
-use std::path::Path;
 use std::time::Duration;
 
 use crate::{
     prompt::{get_interaction, prepare_request_interactive},
-    scope::Scope,
     request::{build_client, do_request},
+    resolve::Resolved,
+    scope::Scope,
 };
 
 pub async fn monitor(
-    file_path: &Path,
+    resolved: &Resolved,
     delay_seconds: i32,
     scope: &Scope,
 ) -> Result<()> {
@@ -26,7 +26,7 @@ pub async fn monitor(
 
     let interaction = get_interaction();
     let req =
-        prepare_request_interactive(file_path, scope, interaction.as_ref())?;
+        prepare_request_interactive(resolved, scope, interaction.as_ref())?;
 
     loop {
         let res = do_request(&client, &req).await;

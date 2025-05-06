@@ -26,8 +26,8 @@ use hitman::{
         load_env, set_target, update_data,
     },
     extract::extract_variables,
-    request::{build_client, do_request, resolve_http_file, HitmanRequest},
-    resolve::resolve_path,
+    request::{build_client, do_request, HitmanRequest},
+    resolve::{resolve_path, Resolved},
     scope::Replacement,
     substitute::{
         prepare_request,
@@ -113,7 +113,7 @@ pub enum Intent {
         params: AskForValueParams,
     },
     SendRequest {
-        file_path: String,
+        resolved: Resolved,
         prepared_request: HitmanRequest,
     },
     ShowResult(HttpRequestInfo),
@@ -209,13 +209,13 @@ impl App {
                 self.set_state(AppState::Idle);
             }
             SendRequest {
-                file_path,
+                resolved,
                 prepared_request,
             } => {
                 let req = HttpRequestMessage(prepared_request.clone());
                 let info = HttpRequestInfo::new(req, RequestStatus::Running);
                 self.output_view.show_request(info);
-                self.send_request(file_path, prepared_request);
+                self.send_request(resolved, prepared_request);
             }
             AskForValue {
                 key,
@@ -355,16 +355,14 @@ impl App {
 
         let path = PathBuf::from(file_path.clone());
 
-        let http_file = resolve_http_file(&path)?;
-
         let resolved = resolve_path(&path)?;
         let intent = match prepare_request(&resolved, &vars)? {
             Complete(prepared_request) => Some(Intent::SendRequest {
-                file_path,
+                resolved,
                 prepared_request,
             }),
             ValueMissing { key, fallback } => {
-                let scope = load_env(&root_dir, &self.target, &http_file, &[])?;
+                let scope = load_env(&root_dir, &self.target, &resolved, &[])?;
 
                 match scope.lookup(&key)? {
                     Replacement::Value(value) => {
@@ -415,15 +413,14 @@ impl App {
 
     fn send_request(
         &mut self,
-        file_path: String,
+        resolved: Resolved,
         prepared_request: HitmanRequest,
     ) {
         let root_dir = self.root_dir.clone();
-        let file_path = PathBuf::from(file_path);
 
         let target = self.target.clone();
         let handle = tokio::spawn(async move {
-            make_request(prepared_request, target, &root_dir, &file_path).await
+            make_request(prepared_request, target, &root_dir, &resolved).await
         });
 
         let state = AppState::RunningRequest {
@@ -689,10 +686,10 @@ async fn make_request(
     req: HitmanRequest,
     target: String,
     root_dir: &Path,
-    file_path: &Path,
+    resolved: &Resolved,
 ) -> HttpRequestInfo {
     let request = HttpRequestMessage(req.clone());
-    let status = match do_make_request(req, target, root_dir, file_path).await {
+    let status = match do_make_request(req, target, root_dir, resolved).await {
         Ok((response, elapsed)) => {
             RequestStatus::Complete { response, elapsed }
         }
@@ -709,11 +706,11 @@ async fn do_make_request(
     req: HitmanRequest,
     target: String,
     root_dir: &Path,
-    file_path: &Path,
+    resolved: &Resolved,
 ) -> Result<(HttpMessage, Duration)> {
     let client = build_client()?;
     let options = vec![];
-    let scope = load_env(root_dir, &target, file_path, &options)?;
+    let scope = load_env(root_dir, &target, resolved, &options)?;
 
     let (res, elapsed) = do_request(&client, &req).await?;
 

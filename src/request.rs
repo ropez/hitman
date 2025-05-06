@@ -1,13 +1,13 @@
 use std::{
     fmt::{Display, Write},
     io::IsTerminal,
-    path::{Path, PathBuf},
+    path::Path,
     str::{self, FromStr},
     sync::Arc,
     time::Duration,
 };
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{bail, Result};
 use futures::StreamExt;
 use graphql_parser::query::{
     Definition, OperationDefinition, VariableDefinition,
@@ -25,6 +25,7 @@ use crate::{
     env::{update_data, HitmanCookieJar},
     extract::extract_variables,
     prompt::{get_interaction, prepare_request_interactive},
+    resolve::Resolved,
     scope::Scope,
     util::truncate,
 };
@@ -110,13 +111,13 @@ pub fn build_client() -> Result<Client> {
     Ok(client)
 }
 
-pub async fn make_request(file_path: &Path, scope: &Scope) -> Result<()> {
+pub async fn make_request(resolved: &Resolved, scope: &Scope) -> Result<()> {
     let client = build_client()?;
 
     let interaction = get_interaction();
 
     let req =
-        prepare_request_interactive(file_path, scope, interaction.as_ref())?;
+        prepare_request_interactive(resolved, scope, interaction.as_ref())?;
 
     clear_screen();
     print_request(&req);
@@ -236,27 +237,6 @@ fn print_response(res: &Response) -> Result<()> {
     }
 
     Ok(())
-}
-
-// TODO: This is very similar to `find_root_dir`
-pub fn resolve_http_file(path: &Path) -> Result<PathBuf> {
-    let ext = path.extension().context("Couldn't find extension")?;
-    if ext != "gql" && ext != "graphql" {
-        return Ok(path.to_path_buf());
-    }
-
-    let mut dir = path.parent().context("No parent")?.to_path_buf();
-    loop {
-        let file = dir.join("_graphql.http");
-        if file.exists() {
-            return Ok(file);
-        }
-        if let Some(parent) = dir.parent() {
-            dir = parent.to_path_buf();
-        } else {
-            return Err(anyhow!("Couldn't find _graphql.http"));
-        }
-    }
 }
 
 #[derive(Clone)]
