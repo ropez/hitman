@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use hitman::resolve::{resolve_path, Resolved};
 use inquire::{list_option::ListOption, Select};
 use log::{error, info};
 use notify::EventKind;
@@ -46,25 +47,26 @@ async fn main() -> Result<()> {
 
     let result = if let Some(file_path) = args.name {
         let file_path = cwd.join(file_path);
+        let resolved = resolve_path(&file_path)?;
 
         if let Some(flurry_size) = args.flurry {
-            let scope = load_env(&root_dir, &target, &file_path, &args.options)?;
+            let scope = load_env(&root_dir, &target, &resolved, &args.options)?;
             flurry_attack(
-                &file_path,
+                &resolved,
                 flurry_size,
                 args.connections.unwrap_or(10),
                 &scope,
             )
             .await
         } else if let Some(delay_seconds) = args.monitor {
-            let scope = load_env(&root_dir, &target, &file_path, &args.options)?;
-            monitor(&file_path, delay_seconds, &scope).await
+            let scope = load_env(&root_dir, &target, &resolved, &args.options)?;
+            monitor(&resolved, delay_seconds, &scope).await
         } else {
             let res =
-                run_once(&root_dir, &target, &file_path, &args.options).await;
+                run_once(&root_dir, &target, &resolved, &args.options).await;
 
             if args.watch {
-                watch_mode(&root_dir, &target, &file_path, &args.options).await
+                watch_mode(&root_dir, &target, &resolved, &args.options).await
             } else {
                 res
             }
@@ -85,9 +87,10 @@ async fn main() -> Result<()> {
                 .prompt()?;
 
             let file_path = &files[selected.index];
+            let resolved = resolve_path(file_path)?;
 
             let result =
-                run_once(&root_dir, &target, file_path, &args.options).await;
+                run_once(&root_dir, &target, &resolved, &args.options).await;
 
             if !args.repeat {
                 break result;
@@ -124,23 +127,23 @@ fn is_user_cancelation(err: &anyhow::Error) -> bool {
 async fn run_once(
     root_dir: &Path,
     target: &str,
-    file_path: &Path,
+    resolved: &Resolved,
     options: &[(String, String)],
 ) -> Result<()> {
-    let scope = load_env(root_dir, target, file_path, options)?;
+    let scope = load_env(root_dir, target, resolved, options)?;
 
-    make_request(file_path, &scope).await
+    make_request(resolved, &scope).await
 }
 
 async fn watch_mode(
     root_dir: &Path,
     target: &str,
-    file_path: &Path,
+    resolved: &Resolved,
     options: &[(String, String)],
 ) -> Result<()> {
     let (tx, mut rx) = mpsc::channel(1);
 
-    let paths = watch_list(root_dir, file_path);
+    let paths = watch_list(root_dir, resolved);
     let mut watcher = Watcher::new(tx, paths)?;
 
     watcher.watch_all()?;
@@ -151,7 +154,7 @@ async fn watch_mode(
             if let EventKind::Modify(_) = event.kind {
                 watcher.unwatch_all()?;
                 if let Err(err) =
-                    run_once(root_dir, target, file_path, options).await
+                    run_once(root_dir, target, resolved, options).await
                 {
                     error!("# {err}");
                 }

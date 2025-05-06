@@ -11,6 +11,7 @@ use toml::{Table as TomlTable, Value};
 use walkdir::WalkDir;
 
 use crate::prompt::fuzzy_match;
+use crate::resolve::Resolved;
 use crate::scope::Scope;
 
 const CONFIG_FILE: &str = "hitman.toml";
@@ -116,20 +117,31 @@ pub fn find_environments(root_dir: &Path) -> Result<Vec<String>> {
 ///
 /// This includes all files used by the request, except the data file.
 /// Trying to watch the data file just causes loops.
-pub fn watch_list(root_dir: &Path, file_path: &Path) -> Vec<PathBuf> {
-    vec![
-        file_path.into(),
-        file_path.with_extension("http.toml"),
+pub fn watch_list(root_dir: &Path, resolved: &Resolved) -> Vec<PathBuf> {
+    let mut res = vec![
         root_dir.join(TARGET_FILE),
         root_dir.join(CONFIG_FILE),
         root_dir.join(LOCAL_CONFIG_FILE),
-    ]
+    ];
+
+    match resolved {
+        Resolved::Simple { path } => {
+            res.push(path.to_path_buf());
+            res.push(path.with_extension("http.toml"));
+        }
+        Resolved::GraphQL { wrapper_path, graphql_path } => {
+            res.push(wrapper_path.to_path_buf());
+            res.push(graphql_path.to_path_buf());
+        }
+    }
+
+    res
 }
 
 pub fn load_env(
     root_dir: &Path,
     target: &str,
-    file_path: &Path,
+    resolved: &Resolved,
     options: &[(String, String)],
 ) -> Result<Scope> {
     use Value::Table;
@@ -147,7 +159,9 @@ pub fn load_env(
         bail!("`{}` not found in config", target);
     }
 
-    if let Ok(content) = read_toml(&file_path.with_extension("http.toml")) {
+    // TODO Handle GQL specifically?
+
+    if let Ok(content) = read_toml(&resolved.http_file().with_extension("http.toml")) {
         table.extend(content);
     }
 

@@ -186,6 +186,11 @@ fn substitute_inner(
 ) -> Substitution<std::string::String> {
     let mut parts = inner.split('|');
 
+    // Only valid with ascii_alphabetic, ascii_digit or underscores in key name
+    let valid_character = |c: &char| -> bool {
+        c.is_ascii_alphabetic() || c.is_ascii_digit() || *c == '_'
+    };
+
     let key = parts.next().unwrap_or("").trim();
     let parsed_key = key.chars().filter(valid_character).collect::<String>();
 
@@ -200,11 +205,6 @@ fn substitute_inner(
             },
             Complete,
         )
-}
-
-// Only valid with ascii_alphabetic, ascii_digit or underscores in key name
-fn valid_character(c: &char) -> bool {
-    c.is_ascii_alphabetic() || c.is_ascii_digit() || *c == '_'
 }
 
 #[cfg(test)]

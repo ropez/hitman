@@ -1,13 +1,13 @@
 use anyhow::{bail, Result};
 use fuzzy_matcher::skim::SkimMatcherV2;
 use inquire::{list_option::ListOption, DateSelect, Select, Text};
-use std::{collections::HashMap, env, path::Path, string::ToString};
+use std::{collections::HashMap, env, string::ToString};
 use toml::Value;
 
 use crate::{
-    scope::{Scope, Replacement},
     request::HitmanRequest,
-    resolve::resolve_path,
+    resolve::Resolved,
+    scope::{Replacement, Scope},
     substitute::{
         prepare_request,
         Substitution::{Complete, ValueMissing},
@@ -50,7 +50,7 @@ pub trait UserInteraction {
 }
 
 pub fn prepare_request_interactive<I>(
-    path: &Path,
+    resolved: &Resolved,
     scope: &Scope,
     interaction: &I,
 ) -> Result<HitmanRequest>
@@ -59,10 +59,8 @@ where
 {
     let mut vars = HashMap::new();
 
-    let resolved = resolve_path(path)?;
-
     loop {
-        match prepare_request(&resolved, &vars)? {
+        match prepare_request(resolved, &vars)? {
             Complete(req) => return Ok(req),
             ValueMissing { key, fallback } => {
                 let value = match scope.lookup(&key)? {

@@ -2,18 +2,19 @@ use anyhow::{bail, Result};
 use futures::future::join_all;
 use log::warn;
 use spinoff::{spinners, Color, Spinner, Streams};
-use std::{path::Path, time::Duration};
+use std::time::Duration;
 use tokio::spawn;
 
 use crate::{
     prompt::{get_interaction, prepare_request_interactive},
-    scope::Scope,
     request::{build_client, do_request},
+    resolve::Resolved,
+    scope::Scope,
     util::{split_work, IterExt},
 };
 
 pub async fn flurry_attack(
-    file_path: &Path,
+    resolved: &Resolved,
     flurry_size: i32,
     connections: i32,
     scope: &Scope,
@@ -31,7 +32,7 @@ pub async fn flurry_attack(
 
     let interaction = get_interaction();
     let req =
-        prepare_request_interactive(file_path, scope, interaction.as_ref())?;
+        prepare_request_interactive(resolved, scope, interaction.as_ref())?;
 
     let t = std::time::Instant::now();
     let mut spinner = Spinner::new_with_stream(
