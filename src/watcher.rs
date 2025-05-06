@@ -25,14 +25,14 @@ impl Watcher {
     }
 
     pub fn watch_all(&mut self) -> Result<()> {
-        for path in self.paths.iter() {
+        for path in &self.paths {
             self.watcher.watch(path, RecursiveMode::NonRecursive)?;
         }
         Ok(())
     }
 
     pub fn unwatch_all(&mut self) -> Result<()> {
-        for path in self.paths.iter() {
+        for path in &self.paths {
             self.watcher.unwatch(path)?;
         }
         Ok(())
