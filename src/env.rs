@@ -63,7 +63,7 @@ impl CookieStore for HitmanCookieJar {
     }
 }
 
-pub fn select_env(root_dir: &Path) -> Result<()> {
+pub fn select_target(root_dir: &Path) -> Result<()> {
     let items = find_environments(root_dir)?;
 
     let selected = Select::new("Select target", items)
