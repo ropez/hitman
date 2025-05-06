@@ -1,4 +1,7 @@
-use std::path::{Path, PathBuf};
+use std::{
+    ffi::{OsStr, OsString},
+    path::{Path, PathBuf},
+};
 
 use anyhow::{bail, Context};
 
@@ -13,10 +16,25 @@ pub enum Resolved {
 }
 
 impl Resolved {
+    pub fn original_path(&self) -> &Path {
+        match self {
+            Self::Simple { path } => path,
+            Self::GraphQL { graphql_path, .. } => graphql_path,
+        }
+    }
+
+    pub fn toml_path(&self) -> PathBuf {
+        let orig = self.original_path();
+        match orig.extension() {
+            Some(ext) => orig.with_extension(with_suffix(ext, ".toml")),
+            None => orig.with_extension("toml"),
+        }
+    }
+
     pub fn http_file(&self) -> &Path {
         match self {
             Self::Simple { path } => path,
-            Self::GraphQL { wrapper_path: template_path, .. } => template_path,
+            Self::GraphQL { wrapper_path, .. } => wrapper_path,
         }
     }
 }
@@ -54,3 +72,8 @@ pub fn resolve_graphql_http_file(path: &Path) -> anyhow::Result<PathBuf> {
     }
 }
 
+fn with_suffix(s: &OsStr, suffix: &str) -> OsString {
+    let mut s = s.to_owned();
+    s.push(suffix);
+    s
+}

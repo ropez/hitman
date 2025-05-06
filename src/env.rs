@@ -119,20 +119,15 @@ pub fn find_environments(root_dir: &Path) -> Result<Vec<String>> {
 /// Trying to watch the data file just causes loops.
 pub fn watch_list(root_dir: &Path, resolved: &Resolved) -> Vec<PathBuf> {
     let mut res = vec![
+        resolved.http_file().to_path_buf(),
+        resolved.toml_path(),
         root_dir.join(TARGET_FILE),
         root_dir.join(CONFIG_FILE),
         root_dir.join(LOCAL_CONFIG_FILE),
     ];
 
-    match resolved {
-        Resolved::Simple { path } => {
-            res.push(path.to_path_buf());
-            res.push(path.with_extension("http.toml"));
-        }
-        Resolved::GraphQL { wrapper_path, graphql_path } => {
-            res.push(wrapper_path.to_path_buf());
-            res.push(graphql_path.to_path_buf());
-        }
+    if let Resolved::GraphQL { graphql_path, .. } = resolved {
+        res.push(graphql_path.to_path_buf());
     }
 
     res
@@ -161,7 +156,7 @@ pub fn load_env(
 
     // TODO Handle GQL specifically?
 
-    if let Ok(content) = read_toml(&resolved.http_file().with_extension("http.toml")) {
+    if let Ok(content) = read_toml(&resolved.toml_path()) {
         table.extend(content);
     }
 
@@ -194,7 +189,8 @@ pub fn update_data(vars: &TomlTable) -> Result<()> {
     };
     let data_file = root_dir.join(DATA_FILE);
 
-    let content = fs::read_to_string(&data_file).unwrap_or_else(|_| String::default());
+    let content =
+        fs::read_to_string(&data_file).unwrap_or_else(|_| String::default());
 
     let mut state = toml::from_str::<TomlTable>(&content).unwrap_or_default();
 
