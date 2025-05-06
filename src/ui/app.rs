@@ -223,36 +223,7 @@ impl App {
                 pending_vars,
                 params,
             } => {
-                let component: Box<dyn PromptComponent> = match params {
-                    AskForValueParams::Select { values } => {
-                        Box::new(Select::new(
-                            format!(
-                                "Select substitution value for {{{{{key}}}}}",
-                            ),
-                            key.clone(),
-                            values,
-                        ))
-                    }
-
-                    AskForValueParams::Prompt { fallback } => {
-                        if key.ends_with("_date") || key.ends_with("Date") {
-                            Box::new(
-                                DatePicker::new(format!(
-                                    "Select {{{{{key}}}}}"
-                                ))
-                                .with_fallback(fallback),
-                            )
-                        } else {
-                            Box::new(
-                                SimplePrompt::new(format!(
-                                    "Enter value for {{{{{key}}}}}"
-                                ))
-                                .with_fallback(fallback),
-                            )
-                        }
-                    }
-                };
-
+                let component = create_prompt_component(&key, params);
                 self.set_state(AppState::PendingValue {
                     key,
                     file_path,
@@ -429,6 +400,64 @@ impl App {
         };
         self.set_state(state);
     }
+
+    fn handle_global_key(&mut self, event: &Event) -> Option<Intent> {
+        match mapkey(event) {
+            KeyMapping::Editor => return Some(Intent::EditRequest),
+            KeyMapping::Reload => {
+                let selected_item =
+                    self.request_selector.selector.selected_item();
+                return Some(Intent::Update(selected_item.cloned()));
+            }
+            KeyMapping::New => return Some(Intent::NewRequest),
+            KeyMapping::Abort => return Some(Intent::Quit),
+            KeyMapping::SelectTarget => {
+                return Some(Intent::SelectTarget);
+            }
+            KeyMapping::IncreaseWidth => {
+                self.vsplit += 5;
+            }
+            KeyMapping::DecreaseWitdh => {
+                if self.vsplit <= 20 {
+                    self.vsplit = 15;
+                } else {
+                    self.vsplit -= 5;
+                }
+            }
+            KeyMapping::ToggleHelp => {
+                return Some(Intent::ShowHelp);
+            }
+            _ => (),
+        }
+        None
+    }
+}
+
+fn create_prompt_component(
+    key: &str,
+    params: AskForValueParams,
+) -> Box<dyn PromptComponent> {
+    match params {
+        AskForValueParams::Select { values } => Box::new(Select::new(
+            format!("Select substitution value for {{{{{key}}}}}"),
+            key.into(),
+            values,
+        )),
+
+        AskForValueParams::Prompt { fallback } => {
+            if key.ends_with("_date") || key.ends_with("Date") {
+                Box::new(
+                    DatePicker::new(format!("Select {{{{{key}}}}}"))
+                        .with_fallback(fallback),
+                )
+            } else {
+                Box::new(
+                    SimplePrompt::new(format!("Enter value for {{{{{key}}}}}"))
+                        .with_fallback(fallback),
+                )
+            }
+        }
+    }
 }
 
 fn open_in_editor<S>(
@@ -478,21 +507,14 @@ impl InteractiveComponent for App {
                         component,
                         ..
                     } => {
-                        if let Some(intent) = component.handle_prompt(event) {
-                            match intent {
-                                PromptIntent::Abort => {
-                                    return Some(Abort);
-                                }
-                                PromptIntent::Accept(value) => {
-                                    pending_vars.insert(key.clone(), value);
-                                    return Some(PrepareRequest {
-                                        file_path: file_path.clone(),
-                                        vars: pending_vars.clone(),
-                                    });
-                                }
-                            }
-                        }
-                        return None;
+                        return component.handle_prompt(event).map(|intent| {
+                            convert_prompt_intent(
+                                key,
+                                file_path,
+                                pending_vars,
+                                intent,
+                            )
+                        });
                     }
                     AppState::ShowHelp => match mapkey(event) {
                         KeyMapping::Abort
@@ -506,55 +528,12 @@ impl InteractiveComponent for App {
                         if let Some(intent) =
                             self.request_selector.handle_event(event)
                         {
-                            match intent {
-                                SelectIntent::Abort => (),
-                                SelectIntent::Accept(file_path) => {
-                                    return Some(PrepareRequest {
-                                        file_path,
-                                        vars: HashMap::new(),
-                                    });
-                                }
-                                SelectIntent::Change(file_path) => {
-                                    return Some(PreviewRequest(file_path));
-                                }
-                            }
+                            return convert_select_intent(intent);
                         }
 
                         self.output_view.handle_event(event);
 
-                        match mapkey(event) {
-                            KeyMapping::Editor => {
-                                return Some(Intent::EditRequest)
-                            }
-                            KeyMapping::Reload => {
-                                let selected_item = self
-                                    .request_selector
-                                    .selector
-                                    .selected_item();
-                                return Some(Intent::Update(
-                                    selected_item.cloned(),
-                                ));
-                            }
-                            KeyMapping::New => return Some(Intent::NewRequest),
-                            KeyMapping::Abort => return Some(Intent::Quit),
-                            KeyMapping::SelectTarget => {
-                                return Some(Intent::SelectTarget);
-                            }
-                            KeyMapping::IncreaseWidth => {
-                                self.vsplit += 5;
-                            }
-                            KeyMapping::DecreaseWitdh => {
-                                if self.vsplit <= 20 {
-                                    self.vsplit = 15;
-                                } else {
-                                    self.vsplit -= 5;
-                                }
-                            }
-                            KeyMapping::ToggleHelp => {
-                                return Some(Intent::ShowHelp);
-                            }
-                            _ => (),
-                        }
+                        return self.handle_global_key(event);
                     }
 
                     AppState::RunningRequest { handle, .. } => {
@@ -595,6 +574,38 @@ impl InteractiveComponent for App {
         }
 
         None
+    }
+}
+
+fn convert_prompt_intent(
+    key: &str,
+    file_path: &str,
+    pending_vars: &HashMap<String, String>,
+    intent: PromptIntent,
+) -> Intent {
+    match intent {
+        PromptIntent::Abort => Intent::Abort,
+        PromptIntent::Accept(value) => {
+            let mut vars = pending_vars.clone();
+            vars.insert(key.into(), value);
+            Intent::PrepareRequest {
+                file_path: file_path.into(),
+                vars,
+            }
+        }
+    }
+}
+
+fn convert_select_intent(intent: SelectIntent<String>) -> Option<Intent> {
+    match intent {
+        SelectIntent::Abort => None,
+        SelectIntent::Accept(file_path) => Some(Intent::PrepareRequest {
+            file_path,
+            vars: HashMap::new(),
+        }),
+        SelectIntent::Change(file_path) => {
+            Some(Intent::PreviewRequest(file_path))
+        }
     }
 }
 
