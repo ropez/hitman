@@ -8,8 +8,8 @@ use std::path::Path;
 use tokio::sync::mpsc;
 
 use hitman::env::{
-    find_available_requests, find_root_dir, get_target, load_env, select_env,
-    watch_list,
+    find_available_requests, find_root_dir, get_target, load_env,
+    select_target, set_target, watch_list,
 };
 use hitman::flurry::flurry_attack;
 use hitman::monitor::monitor;
@@ -36,8 +36,11 @@ async fn main() -> Result<()> {
 
     let root_dir = find_root_dir()?.context("No hitman.toml found")?;
 
-    if args.select {
-        select_env(&root_dir)?;
+    if let Some(arg) = args.select {
+        match arg {
+            Some(target) => set_target(&root_dir, &target)?,
+            None => select_target(&root_dir)?,
+        }
         return Ok(());
     }
 
