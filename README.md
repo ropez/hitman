@@ -2,7 +2,16 @@
 
 A command line tool for hitting API endpoints.
 
-## Basic setup
+## Basic usage
+
+Create a file like `request.http` containing a literal HTTP request, with
+headers and optional body. Then send the request by invoking hitman:
+
+```
+$ hitman request.http
+```
+
+## Project setup
 
 Create your project folder, containing a TOML config file, and HTTP request files
 for each API you want to hit.
