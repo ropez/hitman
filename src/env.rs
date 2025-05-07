@@ -42,7 +42,7 @@ impl CookieStore for HitmanCookieJar {
     }
 
     fn cookies(&self, _: &Url) -> Option<reqwest::header::HeaderValue> {
-        let root_dir = find_root_dir().ok()??;
+        let root_dir = find_root_dir().ok()?;
         let data_file = read_toml(&root_dir.join(DATA_FILE)).ok()?;
 
         match data_file.get(COOKIE_KEY)? {
@@ -85,16 +85,17 @@ pub fn set_target(root_dir: &Path, selected: &str) -> Result<()> {
 
 // The root dir is where we find hitman.toml,
 // scanning parent directories until we find it
-pub fn find_root_dir() -> Result<Option<PathBuf>> {
-    let mut dir = current_dir()?;
+pub fn find_root_dir() -> Result<PathBuf> {
+    let cwd = current_dir()?;
+    let mut dir = cwd.clone();
     let res = loop {
         if dir.join(CONFIG_FILE).exists() {
-            break Some(dir);
+            break dir;
         }
         if let Some(parent) = dir.parent() {
             dir = parent.to_path_buf();
         } else {
-            break None;
+            break cwd;
         }
     };
 
@@ -150,8 +151,6 @@ pub fn load_env(
 
     if let Some(Table(t)) = config.get(target) {
         table.extend(t.clone());
-    } else {
-        bail!("`{}` not found in config", target);
     }
 
     // TODO Handle GQL specifically?
@@ -184,9 +183,6 @@ pub fn update_data(vars: &TomlTable) -> Result<()> {
     }
 
     let root_dir = find_root_dir()?;
-    let Some(root_dir) = root_dir else {
-        bail!("Could not find project root");
-    };
     let data_file = root_dir.join(DATA_FILE);
 
     let content =
@@ -203,7 +199,9 @@ pub fn update_data(vars: &TomlTable) -> Result<()> {
 fn read_and_merge_config(root_dir: &Path) -> Result<TomlTable> {
     let mut config = TomlTable::new();
 
-    merge(&mut config, read_toml(&root_dir.join(CONFIG_FILE))?);
+    if let Ok(content) = read_toml(&root_dir.join(CONFIG_FILE)) {
+        merge(&mut config, content);
+    }
 
     if let Ok(local) = read_toml(&root_dir.join(LOCAL_CONFIG_FILE)) {
         merge(&mut config, local);
