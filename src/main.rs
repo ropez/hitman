@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use hitman::resolve::{resolve_path, Resolved};
 use inquire::{list_option::ListOption, Select};
 use log::{error, info};
@@ -34,7 +34,7 @@ async fn main() -> Result<()> {
 
     set_interactive_mode(!(args.non_interactive || args.watch));
 
-    let root_dir = find_root_dir()?.context("No hitman.toml found")?;
+    let root_dir = find_root_dir()?;
 
     if let Some(arg) = args.select {
         match arg {

@@ -132,7 +132,7 @@ pub enum AskForValueParams {
 
 impl App {
     pub fn new() -> Result<Self> {
-        let root_dir = find_root_dir()?.context("No hitman.toml found")?;
+        let root_dir = find_root_dir()?;
 
         let target = get_target(&root_dir);
 
