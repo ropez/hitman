@@ -1,9 +1,8 @@
-use anyhow::{bail, Result};
+use anyhow::Result;
 use inquire::Select;
 use log::warn;
 use reqwest::cookie::CookieStore;
 use reqwest::Url;
-use std::env::current_dir;
 use std::fs::{self, read_to_string};
 use std::path::{Path, PathBuf};
 use std::string::ToString;
@@ -20,7 +19,17 @@ const TARGET_FILE: &str = ".hitman-target";
 const DATA_FILE: &str = ".hitman-data.toml";
 
 const COOKIE_KEY: &str = "Cookies";
-pub struct HitmanCookieJar;
+pub struct HitmanCookieJar {
+    root_dir: Box<Path>,
+}
+
+impl HitmanCookieJar {
+    pub fn new(root_dir: &Path) -> Self {
+        Self {
+            root_dir: root_dir.into(),
+        }
+    }
+}
 
 impl CookieStore for HitmanCookieJar {
     fn set_cookies(
@@ -38,12 +47,11 @@ impl CookieStore for HitmanCookieJar {
         let mut out = TomlTable::new();
         out.insert(COOKIE_KEY.to_string(), Value::Array(cookies));
 
-        let _ = update_data(&out);
+        let _ = update_data(&self.root_dir, &out);
     }
 
     fn cookies(&self, _: &Url) -> Option<reqwest::header::HeaderValue> {
-        let root_dir = find_root_dir().ok()?;
-        let data_file = read_toml(&root_dir.join(DATA_FILE)).ok()?;
+        let data_file = read_toml(&self.root_dir.join(DATA_FILE)).ok()?;
 
         match data_file.get(COOKIE_KEY)? {
             Value::Array(arr) => {
@@ -83,25 +91,6 @@ pub fn set_target(root_dir: &Path, selected: &str) -> Result<()> {
     Ok(())
 }
 
-// The root dir is where we find hitman.toml,
-// scanning parent directories until we find it
-pub fn find_root_dir() -> Result<PathBuf> {
-    let cwd = current_dir()?;
-    let mut dir = cwd.clone();
-    let res = loop {
-        if dir.join(CONFIG_FILE).exists() {
-            break dir;
-        }
-        if let Some(parent) = dir.parent() {
-            dir = parent.to_path_buf();
-        } else {
-            break cwd;
-        }
-    };
-
-    Ok(res)
-}
-
 pub fn find_environments(root_dir: &Path) -> Result<Vec<String>> {
     let config = read_and_merge_config(root_dir)?;
     let keys: Vec<String> = config
@@ -119,23 +108,17 @@ pub fn find_environments(root_dir: &Path) -> Result<Vec<String>> {
 /// This includes all files used by the request, except the data file.
 /// Trying to watch the data file just causes loops.
 pub fn watch_list(root_dir: &Path, resolved: &Resolved) -> Vec<PathBuf> {
-    let mut res = vec![
+    vec![
+        resolved.original_path().to_path_buf(),
         resolved.http_file().to_path_buf(),
         resolved.toml_path(),
         root_dir.join(TARGET_FILE),
         root_dir.join(CONFIG_FILE),
         root_dir.join(LOCAL_CONFIG_FILE),
-    ];
-
-    if let Resolved::GraphQL { graphql_path, .. } = resolved {
-        res.push(graphql_path.to_path_buf());
-    }
-
-    res
+    ]
 }
 
 pub fn load_env(
-    root_dir: &Path,
     target: &str,
     resolved: &Resolved,
     options: &[(String, String)],
@@ -144,7 +127,7 @@ pub fn load_env(
 
     let mut table = TomlTable::new();
 
-    let config = read_and_merge_config(root_dir)?;
+    let config = read_and_merge_config(&resolved.root_dir)?;
 
     // Global defaults
     table.extend(config.clone().into_iter().filter(|(_, v)| !v.is_table()));
@@ -160,7 +143,7 @@ pub fn load_env(
     }
 
     // FIXME state per environment
-    if let Ok(content) = read_toml(&root_dir.join(DATA_FILE)) {
+    if let Ok(content) = read_toml(&resolved.root_dir.join(DATA_FILE)) {
         table.extend(content);
     }
 
@@ -177,12 +160,11 @@ pub fn get_target(root_dir: &Path) -> String {
         .map_or_else(|_| "default".to_string(), |t| t.trim().to_string())
 }
 
-pub fn update_data(vars: &TomlTable) -> Result<()> {
+pub fn update_data(root_dir: &Path, vars: &TomlTable) -> Result<()> {
     if vars.is_empty() {
         return Ok(());
     }
 
-    let root_dir = find_root_dir()?;
     let data_file = root_dir.join(DATA_FILE);
 
     let content =

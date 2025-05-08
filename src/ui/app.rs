@@ -1,5 +1,6 @@
 use std::{
     collections::HashMap,
+    env::current_dir,
     fmt::Write,
     fs::read_to_string,
     io,
@@ -22,12 +23,12 @@ use toml::Value;
 
 use hitman::{
     env::{
-        find_available_requests, find_environments, find_root_dir, get_target,
-        load_env, set_target, update_data,
+        find_available_requests, find_environments, get_target, load_env,
+        set_target, update_data,
     },
     extract::extract_variables,
     request::{build_client, do_request, HitmanRequest},
-    resolve::{resolve_path, Resolved},
+    resolve::{find_root_dir, resolve_path, Resolved},
     scope::Replacement,
     substitute::{
         prepare_request,
@@ -59,7 +60,7 @@ pub trait Screen {
 }
 
 pub struct App {
-    root_dir: PathBuf,
+    root_dir: Box<Path>,
     target: String,
     request_selector: RequestSelector,
     output_view: OutputView,
@@ -132,7 +133,8 @@ pub enum AskForValueParams {
 
 impl App {
     pub fn new() -> Result<Self> {
-        let root_dir = find_root_dir()?;
+        let root_dir =
+            find_root_dir(&current_dir()?)?.context("No hitman.toml found")?;
 
         let target = get_target(&root_dir);
 
@@ -320,8 +322,6 @@ impl App {
         file_path: String,
         mut vars: HashMap<String, String>,
     ) -> Result<Option<Intent>> {
-        let root_dir = self.root_dir.clone();
-
         // FIXME Call resolve_path and load_env once, and keep result in state
 
         let path = PathBuf::from(file_path.clone());
@@ -333,7 +333,7 @@ impl App {
                 prepared_request,
             }),
             ValueMissing { key, fallback } => {
-                let scope = load_env(&root_dir, &self.target, &resolved, &[])?;
+                let scope = load_env(&self.target, &resolved, &[])?;
 
                 match scope.lookup(&key)? {
                     Replacement::Value(value) => {
@@ -387,11 +387,9 @@ impl App {
         resolved: Resolved,
         prepared_request: HitmanRequest,
     ) {
-        let root_dir = self.root_dir.clone();
-
         let target = self.target.clone();
         let handle = tokio::spawn(async move {
-            make_request(prepared_request, target, &root_dir, &resolved).await
+            make_request(prepared_request, target, &resolved).await
         });
 
         let state = AppState::RunningRequest {
@@ -696,11 +694,10 @@ impl App {
 async fn make_request(
     req: HitmanRequest,
     target: String,
-    root_dir: &Path,
     resolved: &Resolved,
 ) -> HttpRequestInfo {
     let request = HttpRequestMessage(req.clone());
-    let status = match do_make_request(req, target, root_dir, resolved).await {
+    let status = match do_make_request(req, target, resolved).await {
         Ok((response, elapsed)) => {
             RequestStatus::Complete { response, elapsed }
         }
@@ -716,12 +713,11 @@ async fn make_request(
 async fn do_make_request(
     req: HitmanRequest,
     target: String,
-    root_dir: &Path,
     resolved: &Resolved,
 ) -> Result<(HttpMessage, Duration)> {
-    let client = build_client()?;
+    let client = build_client(&resolved.root_dir)?;
     let options = vec![];
-    let scope = load_env(root_dir, &target, resolved, &options)?;
+    let scope = load_env(&target, resolved, &options)?;
 
     let (res, elapsed) = do_request(&client, &req).await?;
 
@@ -741,7 +737,7 @@ async fn do_make_request(
         writeln!(response.body, "{}", serde_json::to_string_pretty(&json)?)?;
 
         let vars = extract_variables(&json, &scope)?;
-        update_data(&vars)?;
+        update_data(&resolved.root_dir, &vars)?;
     }
 
     Ok((response, elapsed))

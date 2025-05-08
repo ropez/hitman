@@ -13,6 +13,11 @@ $ hitman request.http
 
 ## Project setup
 
+To unleash the full power of hitman, a project setup is required. A hitman "project" is a
+directory that contains a single hitman configuration file, `hitman.toml`. Inside the
+project directory, there can be many HTTP or GraphQL request files, or subdirectories that contain
+request files.
+
 Create your project folder, containing a TOML config file, and HTTP request files
 for each API you want to hit.
 

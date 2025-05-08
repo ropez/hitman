@@ -1,14 +1,13 @@
-use anyhow::Result;
-use hitman::resolve::{resolve_path, Resolved};
+use anyhow::{Context, Result};
+use hitman::resolve::{find_root_dir, resolve_path, Resolved};
 use inquire::{list_option::ListOption, Select};
 use log::{error, info};
 use notify::EventKind;
 use std::env::current_dir;
-use std::path::Path;
 use tokio::sync::mpsc;
 
 use hitman::env::{
-    find_available_requests, find_root_dir, get_target, load_env,
+    find_available_requests, get_target, load_env,
     select_target, set_target, watch_list,
 };
 use hitman::flurry::flurry_attack;
@@ -34,9 +33,9 @@ async fn main() -> Result<()> {
 
     set_interactive_mode(!(args.non_interactive || args.watch));
 
-    let root_dir = find_root_dir()?;
-
     if let Some(arg) = args.select {
+        let root_dir = find_root_dir(&current_dir()?)?.context("No hitman.toml found")?;
+
         match arg {
             Some(target) => set_target(&root_dir, &target)?,
             None => select_target(&root_dir)?,
@@ -44,16 +43,16 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
-    let target = args.target.unwrap_or_else(|| get_target(&root_dir));
-
     let cwd = current_dir()?;
 
     let result = if let Some(file_path) = args.name {
         let file_path = cwd.join(file_path);
         let resolved = resolve_path(&file_path)?;
 
+        let target = args.target.clone().unwrap_or_else(|| get_target(&resolved.root_dir));
+
         if let Some(flurry_size) = args.flurry {
-            let scope = load_env(&root_dir, &target, &resolved, &args.options)?;
+            let scope = load_env(&target, &resolved, &args.options)?;
             flurry_attack(
                 &resolved,
                 flurry_size,
@@ -62,14 +61,14 @@ async fn main() -> Result<()> {
             )
             .await
         } else if let Some(delay_seconds) = args.monitor {
-            let scope = load_env(&root_dir, &target, &resolved, &args.options)?;
+            let scope = load_env(&target, &resolved, &args.options)?;
             monitor(&resolved, delay_seconds, &scope).await
         } else {
             let res =
-                run_once(&root_dir, &target, &resolved, &args.options).await;
+                run_once(&target, &resolved, &args.options).await;
 
             if args.watch {
-                watch_mode(&root_dir, &target, &resolved, &args.options).await
+                watch_mode(&target, &resolved, &args.options).await
             } else {
                 res
             }
@@ -91,9 +90,10 @@ async fn main() -> Result<()> {
 
             let file_path = &files[selected.index];
             let resolved = resolve_path(file_path)?;
+            let target = args.target.clone().unwrap_or_else(|| get_target(&resolved.root_dir));
 
             let result =
-                run_once(&root_dir, &target, &resolved, &args.options).await;
+                run_once(&target, &resolved, &args.options).await;
 
             if !args.repeat {
                 break result;
@@ -128,25 +128,23 @@ fn is_user_cancelation(err: &anyhow::Error) -> bool {
 }
 
 async fn run_once(
-    root_dir: &Path,
     target: &str,
     resolved: &Resolved,
     options: &[(String, String)],
 ) -> Result<()> {
-    let scope = load_env(root_dir, target, resolved, options)?;
+    let scope = load_env(target, resolved, options)?;
 
     make_request(resolved, &scope).await
 }
 
 async fn watch_mode(
-    root_dir: &Path,
     target: &str,
     resolved: &Resolved,
     options: &[(String, String)],
 ) -> Result<()> {
     let (tx, mut rx) = mpsc::channel(1);
 
-    let paths = watch_list(root_dir, resolved);
+    let paths = watch_list(&resolved.root_dir, resolved);
     let mut watcher = Watcher::new(tx, paths)?;
 
     watcher.watch_all()?;
@@ -157,7 +155,7 @@ async fn watch_mode(
             if let EventKind::Modify(_) = event.kind {
                 watcher.unwatch_all()?;
                 if let Err(err) =
-                    run_once(root_dir, target, resolved, options).await
+                    run_once(target, resolved, options).await
                 {
                     error!("# {err}");
                 }

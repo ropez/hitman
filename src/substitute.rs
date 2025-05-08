@@ -12,7 +12,7 @@ use std::{
 
 use crate::{
     request::{find_args, HitmanBody, HitmanRequest},
-    resolve::Resolved,
+    resolve::{Resolved, ResolvedAs},
 };
 
 #[derive(Debug, PartialEq, Eq)]
@@ -57,8 +57,8 @@ pub fn prepare_request(
     let method = Method::from_str(method)?;
     let url = Url::parse(url)?;
 
-    let body = match &resolved {
-        Resolved::GraphQL { graphql_path, .. } => {
+    let body = match &resolved.resolved_as {
+        ResolvedAs::GraphQL { graphql_path, .. } => {
             let body = read_to_string(graphql_path)?;
             let args = find_args(graphql_path)?;
 
@@ -89,7 +89,7 @@ pub fn prepare_request(
                 })
             }
         }
-        Resolved::Simple { .. } => match parse_result {
+        ResolvedAs::Simple { .. } => match parse_result {
             Status::Complete(offset) => Some(HitmanBody::Plain {
                 body: buf[offset..].to_string(),
             }),

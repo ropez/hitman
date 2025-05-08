@@ -26,7 +26,7 @@ pub async fn flurry_attack(
         bail!("Connections must be at least 1");
     }
 
-    let client = build_client()?;
+    let client = build_client(&resolved.root_dir)?;
 
     warn!("# Sending {flurry_size} requests on {connections} parallel connections...");
 
