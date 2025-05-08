@@ -103,16 +103,16 @@ impl Display for HitmanRequest {
 static USER_AGENT: &str =
     concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"),);
 
-pub fn build_client() -> Result<Client> {
+pub fn build_client(root_dir: &Path) -> Result<Client> {
     let client = Client::builder()
         .user_agent(USER_AGENT)
-        .cookie_provider(Arc::new(HitmanCookieJar))
+        .cookie_provider(Arc::new(HitmanCookieJar::new(root_dir)))
         .build()?;
     Ok(client)
 }
 
 pub async fn make_request(resolved: &Resolved, scope: &Scope) -> Result<()> {
-    let client = build_client()?;
+    let client = build_client(&resolved.root_dir)?;
 
     let interaction = get_interaction();
 
@@ -143,7 +143,7 @@ pub async fn make_request(resolved: &Resolved, scope: &Scope) -> Result<()> {
     if let Ok(json) = response.json::<Value>().await {
         println!("{}", serde_json::to_string_pretty(&json)?);
         let vars = extract_variables(&json, scope)?;
-        update_data(&vars)?;
+        update_data(&resolved.root_dir, &vars)?;
     }
 
     warn!("# Request completed in {:.2?}", elapsed);

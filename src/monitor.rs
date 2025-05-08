@@ -20,7 +20,7 @@ pub async fn monitor(
         bail!("Invalid delay");
     };
 
-    let client = build_client()?;
+    let client = build_client(&resolved.root_dir)?;
 
     warn!("# Repeating every {delay} seconds, until interrupted...");
 

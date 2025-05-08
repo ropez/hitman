@@ -1,11 +1,15 @@
 use std::{
+    env::current_dir,
     ffi::{OsStr, OsString},
     path::{Path, PathBuf},
 };
 
-use anyhow::{bail, Context};
+use anyhow::{bail, Context, Result};
 
-pub enum Resolved {
+const CONFIG_FILE: &str = "hitman.toml";
+
+#[derive(Debug, Clone)]
+pub enum ResolvedAs {
     Simple {
         path: Box<Path>,
     },
@@ -15,11 +19,16 @@ pub enum Resolved {
     },
 }
 
+pub struct Resolved {
+    pub root_dir: Box<Path>,
+    pub resolved_as: ResolvedAs,
+}
+
 impl Resolved {
     pub fn original_path(&self) -> &Path {
-        match self {
-            Self::Simple { path } => path,
-            Self::GraphQL { graphql_path, .. } => graphql_path,
+        match &self.resolved_as {
+            ResolvedAs::Simple { path } => path,
+            ResolvedAs::GraphQL { graphql_path, .. } => graphql_path,
         }
     }
 
@@ -32,32 +41,59 @@ impl Resolved {
     }
 
     pub fn http_file(&self) -> &Path {
-        match self {
-            Self::Simple { path } => path,
-            Self::GraphQL { wrapper_path, .. } => wrapper_path,
+        match &self.resolved_as {
+            ResolvedAs::Simple { path } => path,
+            ResolvedAs::GraphQL { wrapper_path, .. } => wrapper_path,
         }
     }
 }
 
-pub fn resolve_path(path: &Path) -> anyhow::Result<Resolved> {
-    let ext = path
-        .extension()
-        .context("Couldn't get ext")?
-        .to_ascii_lowercase();
+pub fn resolve_path(path: &Path) -> Result<Resolved> {
+    let root_dir = find_root_dir(path)?.unwrap_or(current_dir()?.into());
 
-    Ok(if ext == "gql" || ext == "graphql" {
+    let resolved_as = if is_graphql(path) {
         let template_path = resolve_graphql_http_file(path)?;
-        Resolved::GraphQL {
+        ResolvedAs::GraphQL {
             wrapper_path: template_path.into(),
             graphql_path: path.into(),
         }
     } else {
-        Resolved::Simple { path: path.into() }
+        ResolvedAs::Simple { path: path.into() }
+    };
+
+    Ok(Resolved {
+        root_dir,
+        resolved_as,
     })
 }
 
+pub fn is_graphql(path: &Path) -> bool {
+    match path.extension().map(|e| e.to_ascii_lowercase()) {
+        Some(ext) => ext == "gql" || ext == "graphql",
+        None => false,
+    }
+}
+
+// The root dir is where we find hitman.toml,
+// scanning parent directories until we find it
+pub fn find_root_dir(path: &Path) -> Result<Option<Box<Path>>> {
+    let mut dir: Box<Path> = path.into();
+    let res = loop {
+        if dir.join(CONFIG_FILE).exists() {
+            break Some(dir);
+        }
+        if let Some(parent) = dir.parent() {
+            dir = parent.into();
+        } else {
+            break None;
+        }
+    };
+
+    Ok(res)
+}
+
 // FIXME: This is very similar to `find_root_dir`
-pub fn resolve_graphql_http_file(path: &Path) -> anyhow::Result<PathBuf> {
+pub fn resolve_graphql_http_file(path: &Path) -> Result<PathBuf> {
     let mut dir = path.parent().context("No parent")?.to_path_buf();
     loop {
         let file = dir.join("_graphql.http");
