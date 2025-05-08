@@ -526,7 +526,10 @@ impl InteractiveComponent for App {
                         if let Some(intent) =
                             self.request_selector.handle_event(event)
                         {
-                            return convert_select_intent(intent);
+                            if let Some(intent) = convert_select_intent(intent)
+                            {
+                                return Some(intent);
+                            }
                         }
 
                         self.output_view.handle_event(event);
