@@ -55,12 +55,16 @@ pub fn extract_variables(data: &JsonValue, scope: &Scope) -> Result<Table> {
                         {
                             let mut toml_items: Vec<Value> = Vec::new();
 
-                            for item_json in items {
+                            'outer: for item_json in items {
                                 let mut toml_item = Table::new();
                                 for (name, selector) in &value_selectors {
                                     if let Some(v) =
                                         selector.find(item_json).next()
                                     {
+                                        if v.is_null() {
+                                            continue 'outer;
+                                        }
+
                                         toml_item.insert(
                                             name.clone(),
                                             Value::try_from(v)?,
@@ -191,6 +195,45 @@ mod tests {
             value = 345
             name = "Second tool"
             _raw = "{\"Name\":\"Second tool\",\"ToolId\":345}"
+        "#,
+        )
+        .unwrap();
+
+        assert!(res.get("ToolId").is_some());
+        assert_eq!(res.get("ToolId").unwrap(), expected.get("ToolId").unwrap(),);
+    }
+
+    #[test]
+    fn extracts_multiple_values_into_array_filter_null() {
+        // workaround: Jsonpath crate doesn't support array
+        let scope = toml::from_str::<Table>(
+            r#"
+        url = "example.com"
+
+        [_extract]
+        ToolId = { _ = "$.Tools", value = "$.ToolId", name = "$.Name" }
+        "#,
+        )
+        .unwrap()
+        .into();
+
+        let data = serde_json::from_str(
+            r#"{
+            "Tools": [
+                { "Name": "First tool", "ToolId": 123 },
+                { "Name": "Second tool", "ToolId": null }
+            ]
+        }"#,
+        )
+        .unwrap();
+        let res = extract_variables(&data, &scope).unwrap();
+
+        let expected: Table = toml::from_str(
+            r#"
+            [[ToolId]]
+            value = 123
+            name = "First tool"
+            _raw = "{\"Name\":\"First tool\",\"ToolId\":123}"
         "#,
         )
         .unwrap();
