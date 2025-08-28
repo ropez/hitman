@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use inquire::Select;
 use log::warn;
 use reqwest::cookie::CookieStore;
@@ -51,7 +51,7 @@ impl CookieStore for HitmanCookieJar {
     }
 
     fn cookies(&self, _: &Url) -> Option<reqwest::header::HeaderValue> {
-        let data_file = read_toml(&self.root_dir.join(DATA_FILE)).ok()?;
+        let data_file = read_toml(&self.root_dir.join(DATA_FILE)).ok().flatten()?;
 
         match data_file.get(COOKIE_KEY)? {
             Value::Array(arr) => {
@@ -138,12 +138,12 @@ pub fn load_env(
 
     // TODO Handle GQL specifically?
 
-    if let Ok(content) = read_toml(&resolved.toml_path()) {
+    if let Some(content) = read_toml(&resolved.toml_path())? {
         table.extend(content);
     }
 
     // FIXME state per environment
-    if let Ok(content) = read_toml(&resolved.root_dir.join(DATA_FILE)) {
+    if let Some(content) = read_toml(&resolved.root_dir.join(DATA_FILE))? {
         table.extend(content);
     }
 
@@ -181,11 +181,11 @@ pub fn update_data(root_dir: &Path, vars: &TomlTable) -> Result<()> {
 fn read_and_merge_config(root_dir: &Path) -> Result<TomlTable> {
     let mut config = TomlTable::new();
 
-    if let Ok(content) = read_toml(&root_dir.join(CONFIG_FILE)) {
+    if let Some(content) = read_toml(&root_dir.join(CONFIG_FILE))? {
         merge(&mut config, content);
     }
 
-    if let Ok(local) = read_toml(&root_dir.join(LOCAL_CONFIG_FILE)) {
+    if let Some(local) = read_toml(&root_dir.join(LOCAL_CONFIG_FILE))? {
         merge(&mut config, local);
     }
 
@@ -210,12 +210,15 @@ fn merge(config: &mut TomlTable, other: TomlTable) {
     });
 }
 
-fn read_toml(file_path: &Path) -> Result<TomlTable> {
-    let content = fs::read_to_string(file_path)?;
+fn read_toml(file_path: &Path) -> Result<Option<TomlTable>> {
+    match fs::read_to_string(file_path) {
+        Ok(content) => {
+            let cfg = toml::from_str::<TomlTable>(&content).with_context(|| format!("When reading {file_path:?}"))?;
 
-    let cfg = toml::from_str::<TomlTable>(&content)?;
-
-    Ok(cfg)
+            Ok(Some(cfg))
+        }
+        Err(_) => Ok(None),
+    }
 }
 
 pub fn find_available_requests(cwd: &Path) -> Result<Vec<PathBuf>> {
