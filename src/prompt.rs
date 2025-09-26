@@ -1,6 +1,6 @@
 use anyhow::{bail, Result};
 use fuzzy_matcher::skim::SkimMatcherV2;
-use inquire::{list_option::ListOption, DateSelect, Select, Text};
+use inquire::{list_option::ListOption, DateSelect, MultiSelect, Select, Text};
 use std::{collections::HashMap, env, string::ToString};
 use toml::Value;
 
@@ -11,6 +11,7 @@ use crate::{
     substitute::{
         prepare_request,
         Substitution::{Complete, ValueMissing},
+        SubstitutionValue,
     },
 };
 
@@ -47,6 +48,11 @@ pub fn get_interaction() -> Box<dyn UserInteraction> {
 pub trait UserInteraction {
     fn prompt(&self, key: &str, fallback: Option<&str>) -> Result<String>;
     fn select(&self, key: &str, values: &[Value]) -> Result<String>;
+    fn select_multiple(
+        &self,
+        key: &str,
+        values: &[Value],
+    ) -> Result<Vec<String>>;
 }
 
 pub fn prepare_request_interactive<I>(
@@ -62,14 +68,30 @@ where
     loop {
         match prepare_request(resolved, &vars)? {
             Complete(req) => return Ok(req),
-            ValueMissing { key, fallback } => {
+            ValueMissing {
+                key,
+                fallback,
+                multiple,
+            } => {
                 let value = match scope.lookup(&key)? {
-                    Replacement::Value(value) => value,
+                    Replacement::Value(value) => {
+                        SubstitutionValue::Single(value)
+                    }
                     Replacement::ValueNotFound { key } => {
-                        interaction.prompt(&key, fallback.as_deref())?
+                        SubstitutionValue::Single(
+                            interaction.prompt(&key, fallback.as_deref())?,
+                        )
                     }
                     Replacement::MultipleValuesFound { key, values } => {
-                        interaction.select(&key, &values)?
+                        if multiple {
+                            SubstitutionValue::Multiple(
+                                interaction.select_multiple(&key, &values)?,
+                            )
+                        } else {
+                            SubstitutionValue::Single(
+                                interaction.select(&key, &values)?,
+                            )
+                        }
                     }
                 };
 
@@ -81,6 +103,20 @@ where
 
 pub struct NoUserInteraction;
 
+impl NoUserInteraction {
+    fn get_suggestions(&self, key: &str, values: &[toml::Value]) -> String {
+        values
+            .iter()
+            .take(10)
+            .filter_map(|v| match (v.get("value"), v.get("name")) {
+                (Some(v), Some(n)) => Some(format!("{key}={v} => {n}")),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+}
+
 impl UserInteraction for NoUserInteraction {
     fn prompt(&self, key: &str, fallback: Option<&str>) -> Result<String> {
         if let Some(val) = fallback.map(ToString::to_string) {
@@ -91,16 +127,16 @@ impl UserInteraction for NoUserInteraction {
     }
 
     fn select(&self, key: &str, values: &[toml::Value]) -> Result<String> {
-        let suggestions: Vec<String> = values
-            .iter()
-            .take(10)
-            .filter_map(|v| match (v.get("value"), v.get("name")) {
-                (Some(v), Some(n)) => Some(format!("{key}={v} => {n}")),
-                _ => None,
-            })
-            .collect();
-        let suggestions = suggestions.join("\n");
+        let suggestions = self.get_suggestions(key, values);
+        bail!("Replacement not selected: {key}\nSuggestions:\n{suggestions}");
+    }
 
+    fn select_multiple(
+        &self,
+        key: &str,
+        values: &[toml::Value],
+    ) -> Result<Vec<String>> {
+        let suggestions = self.get_suggestions(key, values);
         bail!("Replacement not selected: {key}\nSuggestions:\n{suggestions}");
     }
 }
@@ -114,6 +150,14 @@ impl UserInteraction for CliUserInteraction {
 
     fn select(&self, key: &str, values: &[toml::Value]) -> Result<String> {
         select_replacement(key, values)
+    }
+
+    fn select_multiple(
+        &self,
+        key: &str,
+        values: &[Value],
+    ) -> Result<Vec<String>> {
+        select_replacement_multiple(key, values)
     }
 }
 
@@ -147,7 +191,35 @@ fn prompt_for_date(key: &str) -> Result<Option<String>> {
 }
 
 fn select_replacement(key: &str, values: &[Value]) -> Result<String> {
-    let list_options: Vec<ListOption<String>> = values
+    let list_options = values_to_list_options(values);
+    let selected =
+        Select::new(&format!("Select value for {key}"), list_options)
+            .with_scorer(&|filter, _, value, _| fuzzy_match(filter, value))
+            .with_page_size(15)
+            .prompt()?;
+
+    list_option_to_string(key, values, &selected)
+}
+
+fn select_replacement_multiple(
+    key: &str,
+    values: &[Value],
+) -> Result<Vec<String>> {
+    let list_options = values_to_list_options(values);
+    let selected =
+        MultiSelect::new(&format!("Select value for {key}"), list_options)
+            .with_scorer(&|filter, _, value, _| fuzzy_match(filter, value))
+            .with_page_size(15)
+            .prompt()?;
+
+    selected
+        .iter()
+        .map(|item| list_option_to_string(key, values, item))
+        .collect()
+}
+
+fn values_to_list_options(values: &[Value]) -> Vec<ListOption<String>> {
+    values
         .iter()
         .enumerate()
         .map(|(i, v)| {
@@ -163,14 +235,14 @@ fn select_replacement(key: &str, values: &[Value]) -> Result<String> {
                 },
             )
         })
-        .collect();
+        .collect()
+}
 
-    let selected =
-        Select::new(&format!("Select value for {key}"), list_options)
-            .with_scorer(&|filter, _, value, _| fuzzy_match(filter, value))
-            .with_page_size(15)
-            .prompt()?;
-
+fn list_option_to_string(
+    key: &str,
+    values: &[Value],
+    selected: &ListOption<String>,
+) -> Result<String> {
     match &values[selected.index] {
         Value::Table(t) => match t.get("value") {
             Some(Value::String(value)) => Ok(value.clone()),

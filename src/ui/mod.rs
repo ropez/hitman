@@ -1,4 +1,5 @@
 use crossterm::event::Event;
+use hitman::substitute::SubstitutionValue;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     Frame,
@@ -6,12 +7,12 @@ use ratatui::{
 
 pub mod app;
 pub mod datepicker;
+pub mod help;
 pub mod keymap;
 pub mod output;
 pub mod progress;
 pub mod prompt;
 pub mod select;
-pub mod help;
 
 pub trait Component {
     fn render_ui(&mut self, frame: &mut Frame, area: Rect);
@@ -25,7 +26,7 @@ pub trait InteractiveComponent: Component {
 
 pub enum PromptIntent {
     Abort,
-    Accept(String),
+    Accept(SubstitutionValue<String>),
 }
 
 pub trait PromptComponent: Component {
