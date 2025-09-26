@@ -1,5 +1,6 @@
 use crossterm::event::Event;
 use fuzzy_matcher::skim::SkimMatcherV2;
+use hitman::substitute::SubstitutionValue;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Style, Stylize},
@@ -107,7 +108,9 @@ where
     prompt: String,
     items: Vec<T>,
     list_state: ListState,
+    selected: Vec<T>,
     search_input: Input,
+    multiple: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -116,7 +119,7 @@ where
     T: SelectItem + Clone,
 {
     Abort,
-    Accept(T),
+    Accept(SubstitutionValue<T>),
     Change(Option<T>),
 }
 
@@ -129,9 +132,15 @@ where
             title,
             prompt,
             items,
+            selected: Vec::new(),
             list_state: ListState::default().with_selected(Some(0)),
             search_input: Input::default(),
+            multiple: false,
         }
+    }
+
+    pub fn with_multiple(self, multiple: bool) -> Self {
+        Self { multiple, ..self }
     }
 
     pub fn set_items(&mut self, items: Vec<T>) {
@@ -286,9 +295,35 @@ where
                     self.selected_item().cloned(),
                 ));
             }
+            KeyMapping::Tab if self.multiple => {
+                let item = self.selected_item().cloned();
+                if let Some(i) = item {
+                    self.selected.push(i);
+                }
+
+                self.select_next();
+                return Some(SelectIntent::Change(
+                    self.selected_item().cloned(),
+                ));
+            }
             KeyMapping::Accept => {
-                if let Some(item) = self.selected_item() {
-                    return Some(SelectIntent::Accept(item.clone()));
+                if !self.multiple {
+                    if let Some(item) = self.selected_item() {
+                        return Some(SelectIntent::Accept(
+                            SubstitutionValue::Single(item.clone()),
+                        ));
+                    }
+                } else {
+                    let selected = if self.selected.is_empty() {
+                        self.selected_item()
+                            .cloned()
+                            .map_or_else(|| Vec::new(), |i| vec![i])
+                    } else {
+                        self.selected.clone()
+                    };
+                    return Some(SelectIntent::Accept(
+                        SubstitutionValue::Multiple(selected),
+                    ));
                 }
             }
             KeyMapping::Abort => {
@@ -311,16 +346,32 @@ where
     }
 }
 
-impl<T> PromptComponent for Select<T>
-where
-    T: PromptSelectItem + Clone,
-{
+impl PromptComponent for Select<String> {
     fn handle_prompt(&mut self, event: &Event) -> Option<PromptIntent> {
         self.handle_event(event).and_then(|intent| match intent {
             SelectIntent::Abort => Some(PromptIntent::Abort),
-            SelectIntent::Accept(item) => {
-                Some(PromptIntent::Accept(item.to_value()))
-            }
+            SelectIntent::Accept(item) => Some(PromptIntent::Accept(item)),
+            SelectIntent::Change(_) => None,
+        })
+    }
+}
+
+impl PromptComponent for Select<toml::Value> {
+    fn handle_prompt(&mut self, event: &Event) -> Option<PromptIntent> {
+        self.handle_event(event).and_then(|intent| match intent {
+            SelectIntent::Abort => Some(PromptIntent::Abort),
+            SelectIntent::Accept(item) => match item {
+                SubstitutionValue::Single(v) => Some(PromptIntent::Accept(
+                    SubstitutionValue::Single(v.to_value()),
+                )),
+                SubstitutionValue::Multiple(vs) => {
+                    Some(PromptIntent::Accept(SubstitutionValue::Multiple(
+                        vs.into_iter()
+                            .map(|v| v.to_value())
+                            .collect::<Vec<_>>(),
+                    )))
+                }
+            },
             SelectIntent::Change(_) => None,
         })
     }
