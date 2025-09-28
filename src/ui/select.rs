@@ -58,35 +58,38 @@ impl InteractiveComponent for RequestSelector {
     }
 }
 
-fn format_item<'a>(text: &str, indexes: &[usize]) -> ListItem<'a> {
+fn format_item<'a>(text: &str, indexes: &[usize]) -> Vec<Span<'a>> {
     // FIXME: Make '.http' part dark gray
     // For this, we need to implement SelectItem specifically for request paths
 
-    Line::from(
-        text.chars()
-            .enumerate()
-            .map(|(i, c)| {
-                Span::from(String::from(c)).style(if indexes.contains(&i) {
-                    Style::new().yellow()
-                } else {
-                    Style::new()
-                })
+    text.chars()
+        .enumerate()
+        .map(|(i, c)| {
+            Span::from(String::from(c)).style(if indexes.contains(&i) {
+                Style::new().yellow()
+            } else {
+                Style::new()
             })
-            .collect::<Vec<_>>(),
-    )
-    .into()
+        })
+        .collect::<Vec<_>>()
+}
+
+fn format_checkmark<'a>(selected: bool) -> Vec<Span<'a>> {
+    let style = Style::new();
+
+    vec![
+        Span::from("[").style(style),
+        match selected {
+            true => Span::from("x").style(style.cyan()),
+            false => Span::from(" "),
+        },
+        Span::from("]").style(style),
+        Span::from(" "),
+    ]
 }
 
 pub trait SelectItem {
     fn text(&self) -> String;
-
-    fn render<'a>(&self) -> ListItem<'a> {
-        self.text().into()
-    }
-
-    fn render_highlighted<'a>(&self, highlight: &[usize]) -> ListItem<'a> {
-        format_item(&self.text(), highlight)
-    }
 }
 
 pub trait PromptSelectItem: SelectItem {
@@ -125,7 +128,7 @@ where
 
 impl<T> Select<T>
 where
-    T: SelectItem + Clone,
+    T: SelectItem + PartialEq + Clone,
 {
     pub fn new(title: String, prompt: String, items: Vec<T>) -> Self {
         Self {
@@ -204,10 +207,7 @@ where
     fn get_list_items<'a>(&self) -> Vec<ListItem<'a>> {
         self.get_filtered_items()
             .into_iter()
-            .map(|(i, highlight)| {
-                highlight
-                    .map_or_else(|| i.render(), |hl| i.render_highlighted(&hl))
-            })
+            .map(|(i, hl)| self.render_item(i, hl))
             .collect()
     }
 
@@ -223,11 +223,31 @@ where
             self.list_state.select(Some(pos));
         }
     }
+
+    fn render_item<'a>(
+        &self,
+        item: &T,
+        highlight: Option<Vec<usize>>,
+    ) -> ListItem<'a> {
+        let mut line = Line::default();
+
+        if self.multiple {
+            line.extend(format_checkmark(self.selected.contains(item)));
+        }
+
+        if let Some(hl) = &highlight {
+            line.extend(format_item(&item.text(), hl));
+        } else {
+            line.push_span(Span::from(item.text()));
+        }
+
+        line.into()
+    }
 }
 
 impl<T> Component for Select<T>
 where
-    T: SelectItem + Clone,
+    T: SelectItem + PartialEq + Clone,
 {
     fn render_ui(&mut self, frame: &mut Frame, area: Rect) {
         frame.render_widget(Clear, area);
@@ -277,7 +297,7 @@ where
 
 impl<T> InteractiveComponent for Select<T>
 where
-    T: SelectItem + Clone,
+    T: SelectItem + PartialEq + Clone,
 {
     type Intent = SelectIntent<T>;
 
@@ -295,13 +315,21 @@ where
                     self.selected_item().cloned(),
                 ));
             }
-            KeyMapping::Tab if self.multiple => {
+            m @ (KeyMapping::Tab | KeyMapping::ToggleHeaders)
+                if self.multiple =>
+            {
                 let item = self.selected_item().cloned();
                 if let Some(i) = item {
-                    self.selected.push(i);
+                    if self.selected.contains(&i) {
+                        self.selected.retain_mut(|e| *e != i);
+                    } else {
+                        self.selected.push(i);
+                    }
                 }
 
-                self.select_next();
+                if let KeyMapping::Tab = m {
+                    self.select_next();
+                }
                 return Some(SelectIntent::Change(
                     self.selected_item().cloned(),
                 ));
