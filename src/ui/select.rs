@@ -1,5 +1,6 @@
 use crossterm::event::Event;
 use fuzzy_matcher::skim::SkimMatcherV2;
+use hitman::substitute::SubstitutionValue;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Style, Stylize},
@@ -57,35 +58,38 @@ impl InteractiveComponent for RequestSelector {
     }
 }
 
-fn format_item<'a>(text: &str, indexes: &[usize]) -> ListItem<'a> {
+fn format_item<'a>(text: &str, indexes: &[usize]) -> Vec<Span<'a>> {
     // FIXME: Make '.http' part dark gray
     // For this, we need to implement SelectItem specifically for request paths
 
-    Line::from(
-        text.chars()
-            .enumerate()
-            .map(|(i, c)| {
-                Span::from(String::from(c)).style(if indexes.contains(&i) {
-                    Style::new().yellow()
-                } else {
-                    Style::new()
-                })
+    text.chars()
+        .enumerate()
+        .map(|(i, c)| {
+            Span::from(String::from(c)).style(if indexes.contains(&i) {
+                Style::new().yellow()
+            } else {
+                Style::new()
             })
-            .collect::<Vec<_>>(),
-    )
-    .into()
+        })
+        .collect::<Vec<_>>()
+}
+
+fn format_checkmark<'a>(selected: bool) -> Vec<Span<'a>> {
+    let style = Style::new();
+
+    vec![
+        Span::from("[").style(style),
+        match selected {
+            true => Span::from("x").style(style.cyan()),
+            false => Span::from(" "),
+        },
+        Span::from("]").style(style),
+        Span::from(" "),
+    ]
 }
 
 pub trait SelectItem {
     fn text(&self) -> String;
-
-    fn render<'a>(&self) -> ListItem<'a> {
-        self.text().into()
-    }
-
-    fn render_highlighted<'a>(&self, highlight: &[usize]) -> ListItem<'a> {
-        format_item(&self.text(), highlight)
-    }
 }
 
 pub trait PromptSelectItem: SelectItem {
@@ -107,7 +111,9 @@ where
     prompt: String,
     items: Vec<T>,
     list_state: ListState,
+    selected: Vec<T>,
     search_input: Input,
+    multiple: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -116,22 +122,28 @@ where
     T: SelectItem + Clone,
 {
     Abort,
-    Accept(T),
+    Accept(SubstitutionValue<T>),
     Change(Option<T>),
 }
 
 impl<T> Select<T>
 where
-    T: SelectItem + Clone,
+    T: SelectItem + PartialEq + Clone,
 {
     pub fn new(title: String, prompt: String, items: Vec<T>) -> Self {
         Self {
             title,
             prompt,
             items,
+            selected: Vec::new(),
             list_state: ListState::default().with_selected(Some(0)),
             search_input: Input::default(),
+            multiple: false,
         }
+    }
+
+    pub fn with_multiple(self, multiple: bool) -> Self {
+        Self { multiple, ..self }
     }
 
     pub fn set_items(&mut self, items: Vec<T>) {
@@ -195,10 +207,7 @@ where
     fn get_list_items<'a>(&self) -> Vec<ListItem<'a>> {
         self.get_filtered_items()
             .into_iter()
-            .map(|(i, highlight)| {
-                highlight
-                    .map_or_else(|| i.render(), |hl| i.render_highlighted(&hl))
-            })
+            .map(|(i, hl)| self.render_item(i, hl))
             .collect()
     }
 
@@ -214,11 +223,31 @@ where
             self.list_state.select(Some(pos));
         }
     }
+
+    fn render_item<'a>(
+        &self,
+        item: &T,
+        highlight: Option<Vec<usize>>,
+    ) -> ListItem<'a> {
+        let mut line = Line::default();
+
+        if self.multiple {
+            line.extend(format_checkmark(self.selected.contains(item)));
+        }
+
+        if let Some(hl) = &highlight {
+            line.extend(format_item(&item.text(), hl));
+        } else {
+            line.push_span(Span::from(item.text()));
+        }
+
+        line.into()
+    }
 }
 
 impl<T> Component for Select<T>
 where
-    T: SelectItem + Clone,
+    T: SelectItem + PartialEq + Clone,
 {
     fn render_ui(&mut self, frame: &mut Frame, area: Rect) {
         frame.render_widget(Clear, area);
@@ -268,7 +297,7 @@ where
 
 impl<T> InteractiveComponent for Select<T>
 where
-    T: SelectItem + Clone,
+    T: SelectItem + PartialEq + Clone,
 {
     type Intent = SelectIntent<T>;
 
@@ -286,9 +315,43 @@ where
                     self.selected_item().cloned(),
                 ));
             }
+            m @ (KeyMapping::Tab | KeyMapping::ToggleHeaders)
+                if self.multiple =>
+            {
+                let item = self.selected_item().cloned();
+                if let Some(i) = item {
+                    if self.selected.contains(&i) {
+                        self.selected.retain_mut(|e| *e != i);
+                    } else {
+                        self.selected.push(i);
+                    }
+                }
+
+                if let KeyMapping::Tab = m {
+                    self.select_next();
+                }
+                return Some(SelectIntent::Change(
+                    self.selected_item().cloned(),
+                ));
+            }
             KeyMapping::Accept => {
-                if let Some(item) = self.selected_item() {
-                    return Some(SelectIntent::Accept(item.clone()));
+                if !self.multiple {
+                    if let Some(item) = self.selected_item() {
+                        return Some(SelectIntent::Accept(
+                            SubstitutionValue::Single(item.clone()),
+                        ));
+                    }
+                } else {
+                    let selected = if self.selected.is_empty() {
+                        self.selected_item()
+                            .cloned()
+                            .map_or_else(|| Vec::new(), |i| vec![i])
+                    } else {
+                        self.selected.clone()
+                    };
+                    return Some(SelectIntent::Accept(
+                        SubstitutionValue::Multiple(selected),
+                    ));
                 }
             }
             KeyMapping::Abort => {
@@ -311,16 +374,32 @@ where
     }
 }
 
-impl<T> PromptComponent for Select<T>
-where
-    T: PromptSelectItem + Clone,
-{
+impl PromptComponent for Select<String> {
     fn handle_prompt(&mut self, event: &Event) -> Option<PromptIntent> {
         self.handle_event(event).and_then(|intent| match intent {
             SelectIntent::Abort => Some(PromptIntent::Abort),
-            SelectIntent::Accept(item) => {
-                Some(PromptIntent::Accept(item.to_value()))
-            }
+            SelectIntent::Accept(item) => Some(PromptIntent::Accept(item)),
+            SelectIntent::Change(_) => None,
+        })
+    }
+}
+
+impl PromptComponent for Select<toml::Value> {
+    fn handle_prompt(&mut self, event: &Event) -> Option<PromptIntent> {
+        self.handle_event(event).and_then(|intent| match intent {
+            SelectIntent::Abort => Some(PromptIntent::Abort),
+            SelectIntent::Accept(item) => match item {
+                SubstitutionValue::Single(v) => Some(PromptIntent::Accept(
+                    SubstitutionValue::Single(v.to_value()),
+                )),
+                SubstitutionValue::Multiple(vs) => {
+                    Some(PromptIntent::Accept(SubstitutionValue::Multiple(
+                        vs.into_iter()
+                            .map(|v| v.to_value())
+                            .collect::<Vec<_>>(),
+                    )))
+                }
+            },
             SelectIntent::Change(_) => None,
         })
     }
