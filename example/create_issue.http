@@ -1,0 +1,8 @@
+POST {{base_url}}/repos/{{owner}}/{{repo}}/issues HTTP/1.1
+Accept: application/vnd.github+json
+
+{
+    "title": "Found a bug",
+    "body": "I'm having a problem with this.",
+    "labels": [ {{ label[, ]["] }} ],
+}

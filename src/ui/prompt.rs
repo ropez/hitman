@@ -1,4 +1,5 @@
 use crossterm::event::Event;
+use hitman::substitute::SubstitutionValue;
 use ratatui::{
     layout::Rect,
     style::Stylize,
@@ -36,12 +37,14 @@ impl SimplePrompt {
         }
     }
 
-    fn value(&self) -> String {
+    fn value(&self) -> SubstitutionValue<String> {
         let input_value = self.input.value().to_string();
         if input_value.is_empty() {
-            self.fallback.clone().unwrap_or(input_value)
+            SubstitutionValue::Single(
+                self.fallback.clone().unwrap_or(input_value),
+            )
         } else {
-            input_value
+            SubstitutionValue::Single(input_value)
         }
     }
 }

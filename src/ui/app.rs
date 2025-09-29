@@ -33,6 +33,7 @@ use hitman::{
     substitute::{
         prepare_request,
         Substitution::{Complete, ValueMissing},
+        SubstitutionValue,
     },
 };
 
@@ -79,7 +80,7 @@ pub enum AppState {
     PendingValue {
         file_path: String,
         key: String,
-        pending_vars: HashMap<String, String>,
+        pending_vars: HashMap<String, SubstitutionValue<String>>,
         component: Box<dyn PromptComponent>,
     },
 
@@ -105,12 +106,12 @@ pub enum Intent {
     PreviewRequest(Option<String>),
     PrepareRequest {
         file_path: String,
-        vars: HashMap<String, String>,
+        vars: HashMap<String, SubstitutionValue<String>>,
     },
     AskForValue {
         key: String,
         file_path: String,
-        pending_vars: HashMap<String, String>,
+        pending_vars: HashMap<String, SubstitutionValue<String>>,
         params: AskForValueParams,
     },
     SendRequest {
@@ -128,7 +129,7 @@ pub enum Intent {
 
 pub enum AskForValueParams {
     Prompt { fallback: Option<String> },
-    Select { values: Vec<Value> },
+    Select { values: Vec<Value>, multiple: bool },
 }
 
 impl App {
@@ -320,7 +321,7 @@ impl App {
     fn try_request(
         &self,
         file_path: String,
-        mut vars: HashMap<String, String>,
+        mut vars: HashMap<String, SubstitutionValue<String>>,
     ) -> Result<Option<Intent>> {
         // FIXME Call resolve_path and load_env once, and keep result in state
 
@@ -332,12 +333,16 @@ impl App {
                 resolved,
                 prepared_request,
             }),
-            ValueMissing { key, fallback } => {
+            ValueMissing {
+                key,
+                fallback,
+                multiple,
+            } => {
                 let scope = load_env(&self.target, &resolved, &[])?;
 
                 match scope.lookup(&key)? {
                     Replacement::Value(value) => {
-                        vars.insert(key, value);
+                        vars.insert(key, SubstitutionValue::Single(value));
                         Some(Intent::PrepareRequest { file_path, vars })
                     }
                     Replacement::MultipleValuesFound { key, values } => {
@@ -345,7 +350,10 @@ impl App {
                             key,
                             file_path,
                             pending_vars: vars,
-                            params: AskForValueParams::Select { values },
+                            params: AskForValueParams::Select {
+                                values,
+                                multiple,
+                            },
                         })
                     }
                     Replacement::ValueNotFound { key } => {
@@ -436,11 +444,14 @@ fn create_prompt_component(
     params: AskForValueParams,
 ) -> Box<dyn PromptComponent> {
     match params {
-        AskForValueParams::Select { values } => Box::new(Select::new(
-            format!("Select substitution value for {{{{{key}}}}}"),
-            key.into(),
-            values,
-        )),
+        AskForValueParams::Select { values, multiple } => Box::new(
+            Select::new(
+                format!("Select substitution value for {{{{{key}}}}}"),
+                key.into(),
+                values,
+            )
+            .with_multiple(multiple),
+        ),
 
         AskForValueParams::Prompt { fallback } => {
             if key.ends_with("_date") || key.ends_with("Date") {
@@ -550,9 +561,14 @@ impl InteractiveComponent for App {
                                 PromptIntent::Abort => {
                                     return Some(Abort);
                                 }
-                                PromptIntent::Accept(s) => {
-                                    return Some(AcceptNewRequest(s));
-                                }
+                                PromptIntent::Accept(s) => match s {
+                                    SubstitutionValue::Single(s) => {
+                                        return Some(AcceptNewRequest(s))
+                                    }
+                                    SubstitutionValue::Multiple(_) => {
+                                        unreachable!("Can never accept multiple requests")
+                                    }
+                                },
                             }
                         }
                     }
@@ -564,7 +580,16 @@ impl InteractiveComponent for App {
                                     return Some(Abort);
                                 }
                                 SelectIntent::Accept(s) => {
-                                    return Some(AcceptSelectTarget(s));
+                                    match s {
+                                        SubstitutionValue::Single(s) => {
+                                            return Some(AcceptSelectTarget(s))
+                                        }
+                                        SubstitutionValue::Multiple(_) => {
+                                            unreachable!(
+                                                "Can never select multiple targets"
+                                            )
+                                        }
+                                    };
                                 }
                                 SelectIntent::Change(_) => (),
                             }
@@ -581,7 +606,7 @@ impl InteractiveComponent for App {
 fn convert_prompt_intent(
     key: &str,
     file_path: &str,
-    pending_vars: &HashMap<String, String>,
+    pending_vars: &HashMap<String, SubstitutionValue<String>>,
     intent: PromptIntent,
 ) -> Intent {
     match intent {
@@ -600,10 +625,17 @@ fn convert_prompt_intent(
 fn convert_select_intent(intent: SelectIntent<String>) -> Option<Intent> {
     match intent {
         SelectIntent::Abort => None,
-        SelectIntent::Accept(file_path) => Some(Intent::PrepareRequest {
-            file_path,
-            vars: HashMap::new(),
-        }),
+        SelectIntent::Accept(value) => match value {
+            SubstitutionValue::Single(file_path) => {
+                Some(Intent::PrepareRequest {
+                    file_path,
+                    vars: HashMap::new(),
+                })
+            }
+            SubstitutionValue::Multiple(_) => {
+                unreachable!("Can never select multiple requests")
+            }
+        },
         SelectIntent::Change(file_path) => {
             Some(Intent::PreviewRequest(file_path))
         }

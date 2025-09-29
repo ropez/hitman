@@ -3,3 +3,19 @@ base_url = 'https://api.github.com'
 
 [alternative]
 base_url = 'https://api.github.com'
+
+[[label]]
+value = "bug"
+name = "bug"
+
+[[label]]
+value = "documentation"
+name = "documentation"
+
+[[label]]
+value = "duplicate"
+name = "duplicate"
+
+[[label]]
+value = "enhancement"
+name = "enhancement"
