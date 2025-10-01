@@ -78,20 +78,26 @@ pub fn prepare_request(
                     variables: None,
                 })
             } else {
-                let mut map: HashMap<String, String> = HashMap::new();
+                let mut map: HashMap<String, serde_json::Value> =
+                    HashMap::new();
 
                 for key in args {
-                    let Some(value) = vars.get(&key) else {
+                    let Some(value) = vars.get(&key.name) else {
                         return Ok(ValueMissing {
-                            key,
+                            key: key.name,
                             fallback: None,
-                            multiple: false,
+                            multiple: key.list,
                         });
                     };
 
-                    if let SubstitutionValue::Single(value) = value {
-                        map.insert(key, value.clone());
-                    }
+                    match value {
+                        SubstitutionValue::Single(item) => {
+                            map.insert(key.name, serde_json::to_value(item)?);
+                        }
+                        SubstitutionValue::Multiple(items) => {
+                            map.insert(key.name, serde_json::to_value(items)?);
+                        }
+                    };
                 }
 
                 let variables = serde_json::to_value(map)?;
