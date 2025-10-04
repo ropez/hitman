@@ -258,10 +258,15 @@ impl Display for GraphQLOperation {
 
 pub struct GraphQLRequest {
     pub operation: GraphQLOperation,
-    pub args: Vec<String>,
+    pub args: Vec<GraphQLVariable>,
 }
 
-pub fn find_args<P>(path: P) -> Result<Vec<String>>
+pub struct GraphQLVariable {
+    pub name: String,
+    pub list: bool,
+}
+
+pub fn find_args<P>(path: P) -> Result<Vec<GraphQLVariable>>
 where
     P: AsRef<Path>,
 {
@@ -269,7 +274,15 @@ where
     let doc = graphql_parser::parse_query::<String>(&file)?;
 
     let variables = |vars: &[VariableDefinition<String>]| {
-        vars.iter().map(|d| d.name.clone()).collect::<Vec<_>>()
+        vars.iter()
+            .map(|d| GraphQLVariable {
+                name: d.name.clone(),
+                list: matches!(
+                    d.var_type,
+                    graphql_parser::query::Type::ListType(_)
+                ),
+            })
+            .collect::<Vec<_>>()
     };
 
     let args = match doc.definitions.first() {
