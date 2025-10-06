@@ -1,6 +1,5 @@
 use std::{
     fmt::{Display, Write},
-    io::IsTerminal,
     path::Path,
     str::{self, FromStr},
     sync::Arc,
@@ -119,7 +118,6 @@ pub async fn make_request(resolved: &Resolved, scope: &Scope) -> Result<()> {
     let req =
         prepare_request_interactive(resolved, scope, interaction.as_ref())?;
 
-    clear_screen();
     print_request(&req);
 
     let mut spinner = Spinner::new_with_stream(
@@ -168,25 +166,6 @@ async fn parse_stream_output(response: Response) -> Result<()> {
         }
     }
     Ok(())
-}
-
-fn clear_screen() {
-    let stdout = std::io::stdout();
-    if !stdout.is_terminal() {
-        return;
-    }
-
-    if cfg!(windows) {
-        std::process::Command::new("cmd")
-            .args(["/c", "cls"])
-            .spawn()
-            .expect("cls command failed to start")
-            .wait()
-            .expect("failed to wait");
-    } else {
-        // Untested!
-        println!("\x1B[2J");
-    }
 }
 
 pub async fn do_request(
