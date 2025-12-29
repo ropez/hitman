@@ -1,0 +1,5 @@
+[env]
+CC = "gcc-14"
+
+[tasks.build]
+run = "cargo build"
