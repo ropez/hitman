@@ -395,9 +395,9 @@ impl PromptComponent for Select<toml::Value> {
         self.handle_event(event).and_then(|intent| match intent {
             SelectIntent::Abort => Some(PromptIntent::Abort),
             SelectIntent::Accept(item) => match item {
-                SubstitutionValue::Single(v) => Some(PromptIntent::Accept(
-                    JinjaValue::from_serialize(&v),
-                )),
+                SubstitutionValue::Single(v) => {
+                    Some(PromptIntent::Accept(JinjaValue::from_serialize(&v)))
+                }
                 SubstitutionValue::Multiple(vs) => {
                     let items: Vec<JinjaValue> = vs
                         .into_iter()

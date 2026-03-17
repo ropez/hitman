@@ -144,9 +144,10 @@ impl PromptComponent for DatePicker {
                     self.selected.checked_add_days(Days::new(1)).unwrap();
             }
             KeyMapping::Accept => {
-                return Some(PromptIntent::Accept(JinjaValue::from(
-                    format!("{}", self.selected),
-                )));
+                return Some(PromptIntent::Accept(JinjaValue::from(format!(
+                    "{}",
+                    self.selected
+                ))));
             }
             KeyMapping::Abort => {
                 return Some(PromptIntent::Abort);

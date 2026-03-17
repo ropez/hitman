@@ -57,9 +57,10 @@ impl Object for TrackingContext {
             Some(v) => Some(v.clone()),
             None => {
                 // Track the last missing key. Using "last" rather than
-                // "first" correctly handles {{ var | default('x') }} {{ other }}:
-                // the default filter handles `var` silently, then `other`
-                // causes the render to fail, and we report `other`.
+                // "first" correctly handles {{ var | default('x') }} {{ other
+                // }}: the default filter handles `var`
+                // silently, then `other` causes the render to
+                // fail, and we report `other`.
                 *self.last_missing.lock().unwrap() = Some(key_str.to_string());
                 Some(Value::UNDEFINED)
             }
@@ -316,16 +317,10 @@ mod tests {
     #[test]
     fn substitutes_list_quoted_join() {
         let vars = create_vars();
-        let res = substitute(
-            r#"foo: ["{{ list | join('", "') }}"]"#,
-            &vars,
-        )
-        .unwrap();
+        let res =
+            substitute(r#"foo: ["{{ list | join('", "') }}"]"#, &vars).unwrap();
 
-        assert_eq!(
-            res,
-            Complete(r#"foo: ["1", "2", "3"]"#.to_string())
-        );
+        assert_eq!(res, Complete(r#"foo: ["1", "2", "3"]"#.to_string()));
     }
 
     #[test]
@@ -343,11 +338,8 @@ mod tests {
     #[test]
     fn returns_value_missing_when_var_missing_but_other_has_default() {
         let vars = create_vars();
-        let res = substitute(
-            "{{ url | default('x') }} {{ missing }}",
-            &vars,
-        )
-        .unwrap();
+        let res = substitute("{{ url | default('x') }} {{ missing }}", &vars)
+            .unwrap();
 
         assert_eq!(
             res,

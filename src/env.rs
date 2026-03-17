@@ -51,7 +51,8 @@ impl CookieStore for HitmanCookieJar {
     }
 
     fn cookies(&self, _: &Url) -> Option<reqwest::header::HeaderValue> {
-        let data_file = read_toml(&self.root_dir.join(DATA_FILE)).ok().flatten()?;
+        let data_file =
+            read_toml(&self.root_dir.join(DATA_FILE)).ok().flatten()?;
 
         match data_file.get(COOKIE_KEY)? {
             Value::Array(arr) => {
@@ -213,7 +214,8 @@ fn merge(config: &mut TomlTable, other: TomlTable) {
 fn read_toml(file_path: &Path) -> Result<Option<TomlTable>> {
     match fs::read_to_string(file_path) {
         Ok(content) => {
-            let cfg = toml::from_str::<TomlTable>(&content).with_context(|| format!("When reading {file_path:?}"))?;
+            let cfg = toml::from_str::<TomlTable>(&content)
+                .with_context(|| format!("When reading {file_path:?}"))?;
 
             Ok(Some(cfg))
         }
