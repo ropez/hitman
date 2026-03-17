@@ -29,7 +29,7 @@ pub use Substitution::{Complete, ValueMissing};
 
 thread_local! {
     static MISSING: Cell<Option<String>> = const { Cell::new(None) };
-    static MISSING_MULTIPLE: Cell<bool> = const { Cell::new(false) };
+    static MULTIPLE: Cell<bool> = const { Cell::new(false) };
 }
 
 #[derive(Debug)]
@@ -143,18 +143,18 @@ pub fn substitute(
     vars: &HashMap<String, Value>,
 ) -> anyhow::Result<Substitution<String>> {
     MISSING.set(None);
-    MISSING_MULTIPLE.set(false);
+    MULTIPLE.set(false);
     let ctx = TrackingContext { vars: vars.clone() };
 
     let mut env = Environment::new();
     env.set_undefined_behavior(UndefinedBehavior::Strict);
     env.set_keep_trailing_newline(true);
     env.add_filter("select_multiple", |v: Value| {
-        MISSING_MULTIPLE.set(true);
+        MULTIPLE.set(true);
         v
     });
     env.add_filter("select_one", |v: Value| {
-        MISSING_MULTIPLE.set(false);
+        MULTIPLE.set(false);
         v
     });
 
@@ -166,7 +166,7 @@ pub fn substitute(
             if let Some(key) = MISSING.take() {
                 return Ok(ValueMissing {
                     key,
-                    multiple: MISSING_MULTIPLE.take(),
+                    multiple: MULTIPLE.take(),
                 });
             }
             Err(e.into())
