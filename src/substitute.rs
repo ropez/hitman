@@ -197,7 +197,7 @@ mod tests {
         );
         vars.insert(
             "label".to_string(),
-            Value::from_serialize(&vec![
+            Value::from_serialize(vec![
                 serde_json::json!({"value": "bug", "name": "bug"}),
                 serde_json::json!({"value": "docs", "name": "documentation"}),
             ]),
