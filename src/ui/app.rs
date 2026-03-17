@@ -36,6 +36,7 @@ use hitman::{
         SubstitutionValue,
     },
 };
+use minijinja::Value as JinjaValue;
 
 use super::{
     centered,
@@ -46,9 +47,7 @@ use super::{
     output::{HttpRequestInfo, RequestStatus},
     progress::Progress,
     prompt::SimplePrompt,
-    select::{
-        PromptSelectItem, RequestSelector, Select, SelectIntent, SelectItem,
-    },
+    select::{RequestSelector, Select, SelectIntent, SelectItem},
     Component, InteractiveComponent, PromptComponent, PromptIntent,
 };
 
@@ -80,7 +79,7 @@ pub enum AppState {
     PendingValue {
         file_path: String,
         key: String,
-        pending_vars: HashMap<String, SubstitutionValue<String>>,
+        pending_vars: HashMap<String, JinjaValue>,
         component: Box<dyn PromptComponent>,
     },
 
@@ -106,12 +105,12 @@ pub enum Intent {
     PreviewRequest(Option<String>),
     PrepareRequest {
         file_path: String,
-        vars: HashMap<String, SubstitutionValue<String>>,
+        vars: HashMap<String, JinjaValue>,
     },
     AskForValue {
         key: String,
         file_path: String,
-        pending_vars: HashMap<String, SubstitutionValue<String>>,
+        pending_vars: HashMap<String, JinjaValue>,
         params: AskForValueParams,
     },
     SendRequest {
@@ -128,8 +127,8 @@ pub enum Intent {
 }
 
 pub enum AskForValueParams {
-    Prompt { fallback: Option<String> },
-    Select { values: Vec<Value>, multiple: bool },
+    Prompt,
+    Select { values: Vec<Value> },
 }
 
 impl App {
@@ -321,7 +320,7 @@ impl App {
     fn try_request(
         &self,
         file_path: String,
-        mut vars: HashMap<String, SubstitutionValue<String>>,
+        mut vars: HashMap<String, JinjaValue>,
     ) -> Result<Option<Intent>> {
         // FIXME Call resolve_path and load_env once, and keep result in state
 
@@ -333,16 +332,12 @@ impl App {
                 resolved,
                 prepared_request,
             }),
-            ValueMissing {
-                key,
-                fallback,
-                multiple,
-            } => {
+            ValueMissing { key } => {
                 let scope = load_env(&self.target, &resolved, &[])?;
 
                 match scope.lookup(&key)? {
                     Replacement::Value(value) => {
-                        vars.insert(key, SubstitutionValue::Single(value));
+                        vars.insert(key, JinjaValue::from(value));
                         Some(Intent::PrepareRequest { file_path, vars })
                     }
                     Replacement::MultipleValuesFound { key, values } => {
@@ -350,10 +345,7 @@ impl App {
                             key,
                             file_path,
                             pending_vars: vars,
-                            params: AskForValueParams::Select {
-                                values,
-                                multiple,
-                            },
+                            params: AskForValueParams::Select { values },
                         })
                     }
                     Replacement::ValueNotFound { key } => {
@@ -361,7 +353,7 @@ impl App {
                             key,
                             file_path,
                             pending_vars: vars,
-                            params: AskForValueParams::Prompt { fallback },
+                            params: AskForValueParams::Prompt,
                         })
                     }
                 }
@@ -444,26 +436,22 @@ fn create_prompt_component(
     params: AskForValueParams,
 ) -> Box<dyn PromptComponent> {
     match params {
-        AskForValueParams::Select { values, multiple } => Box::new(
+        AskForValueParams::Select { values } => Box::new(
             Select::new(
                 format!("Select substitution value for {{{{{key}}}}}"),
                 key.into(),
                 values,
             )
-            .with_multiple(multiple),
+            .with_multiple(true),
         ),
 
-        AskForValueParams::Prompt { fallback } => {
+        AskForValueParams::Prompt => {
             if key.ends_with("_date") || key.ends_with("Date") {
-                Box::new(
-                    DatePicker::new(format!("Select {{{{{key}}}}}"))
-                        .with_fallback(fallback),
-                )
+                Box::new(DatePicker::new(format!("Select {{{{{key}}}}}")))
             } else {
-                Box::new(
-                    SimplePrompt::new(format!("Enter value for {{{{{key}}}}}"))
-                        .with_fallback(fallback),
-                )
+                Box::new(SimplePrompt::new(format!(
+                    "Enter value for {{{{{key}}}}}"
+                )))
             }
         }
     }
@@ -561,14 +549,13 @@ impl InteractiveComponent for App {
                                 PromptIntent::Abort => {
                                     return Some(Abort);
                                 }
-                                PromptIntent::Accept(s) => match s {
-                                    SubstitutionValue::Single(s) => {
-                                        return Some(AcceptNewRequest(s))
-                                    }
-                                    SubstitutionValue::Multiple(_) => {
-                                        unreachable!("Can never accept multiple requests")
-                                    }
-                                },
+                                PromptIntent::Accept(v) => {
+                                    let s = v
+                                        .as_str()
+                                        .unwrap_or_default()
+                                        .to_string();
+                                    return Some(AcceptNewRequest(s));
+                                }
                             }
                         }
                     }
@@ -606,7 +593,7 @@ impl InteractiveComponent for App {
 fn convert_prompt_intent(
     key: &str,
     file_path: &str,
-    pending_vars: &HashMap<String, SubstitutionValue<String>>,
+    pending_vars: &HashMap<String, JinjaValue>,
     intent: PromptIntent,
 ) -> Intent {
     match intent {
@@ -791,15 +778,3 @@ impl SelectItem for Value {
     }
 }
 
-impl PromptSelectItem for Value {
-    fn to_value(&self) -> String {
-        match self {
-            Self::Table(t) => match t.get("value") {
-                Some(Self::String(value)) => value.clone(),
-                Some(value) => value.to_string(),
-                _ => t.to_string(),
-            },
-            other => other.to_string(),
-        }
-    }
-}

@@ -1,6 +1,7 @@
 use crossterm::event::Event;
 use fuzzy_matcher::skim::SkimMatcherV2;
 use hitman::substitute::SubstitutionValue;
+use minijinja::Value as JinjaValue;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Style, Stylize},
@@ -90,10 +91,6 @@ fn format_checkmark<'a>(selected: bool) -> Vec<Span<'a>> {
 
 pub trait SelectItem {
     fn text(&self) -> String;
-}
-
-pub trait PromptSelectItem: SelectItem {
-    fn to_value(&self) -> String;
 }
 
 impl SelectItem for String {
@@ -378,7 +375,16 @@ impl PromptComponent for Select<String> {
     fn handle_prompt(&mut self, event: &Event) -> Option<PromptIntent> {
         self.handle_event(event).and_then(|intent| match intent {
             SelectIntent::Abort => Some(PromptIntent::Abort),
-            SelectIntent::Accept(item) => Some(PromptIntent::Accept(item)),
+            SelectIntent::Accept(item) => match item {
+                SubstitutionValue::Single(s) => {
+                    Some(PromptIntent::Accept(JinjaValue::from(s)))
+                }
+                SubstitutionValue::Multiple(ss) => {
+                    let items: Vec<JinjaValue> =
+                        ss.into_iter().map(JinjaValue::from).collect();
+                    Some(PromptIntent::Accept(JinjaValue::from(items)))
+                }
+            },
             SelectIntent::Change(_) => None,
         })
     }
@@ -390,14 +396,14 @@ impl PromptComponent for Select<toml::Value> {
             SelectIntent::Abort => Some(PromptIntent::Abort),
             SelectIntent::Accept(item) => match item {
                 SubstitutionValue::Single(v) => Some(PromptIntent::Accept(
-                    SubstitutionValue::Single(v.to_value()),
+                    JinjaValue::from_serialize(&v),
                 )),
                 SubstitutionValue::Multiple(vs) => {
-                    Some(PromptIntent::Accept(SubstitutionValue::Multiple(
-                        vs.into_iter()
-                            .map(|v| v.to_value())
-                            .collect::<Vec<_>>(),
-                    )))
+                    let items: Vec<JinjaValue> = vs
+                        .into_iter()
+                        .map(|v| JinjaValue::from_serialize(&v))
+                        .collect();
+                    Some(PromptIntent::Accept(JinjaValue::from(items)))
                 }
             },
             SelectIntent::Change(_) => None,

@@ -1,5 +1,8 @@
-use anyhow::{bail, Context};
+use std::sync::{Arc, Mutex};
+
+use anyhow::Context;
 use httparse::Status;
+use minijinja::{value::Object, Environment, UndefinedBehavior, Value};
 use reqwest::{
     header::{HeaderMap, HeaderName, HeaderValue},
     Method, Url,
@@ -18,40 +21,60 @@ use crate::{
 #[derive(Debug, PartialEq, Eq)]
 pub enum Substitution<T> {
     Complete(T),
-    ValueMissing {
-        key: String,
-        fallback: Option<String>,
-        multiple: bool,
-    },
+    ValueMissing { key: String },
 }
 
 pub use Substitution::{Complete, ValueMissing};
 
+// Used by UI layer to track whether a single or multiple values were selected
+#[derive(Debug, Clone)]
+pub enum SubstitutionValue<T> {
+    Single(T),
+    Multiple(Vec<T>),
+}
+
+struct TrackingContext {
+    vars: HashMap<String, Value>,
+    last_missing: Arc<Mutex<Option<String>>>,
+}
+
+impl std::fmt::Debug for TrackingContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "TrackingContext")
+    }
+}
+
+impl std::fmt::Display for TrackingContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "TrackingContext")
+    }
+}
+
+impl Object for TrackingContext {
+    fn get_value(self: &Arc<Self>, key: &Value) -> Option<Value> {
+        let key_str = key.as_str()?;
+        match self.vars.get(key_str) {
+            Some(v) => Some(v.clone()),
+            None => {
+                // Track the last missing key. Using "last" rather than
+                // "first" correctly handles {{ var | default('x') }} {{ other }}:
+                // the default filter handles `var` silently, then `other`
+                // causes the render to fail, and we report `other`.
+                *self.last_missing.lock().unwrap() = Some(key_str.to_string());
+                Some(Value::UNDEFINED)
+            }
+        }
+    }
+}
+
 pub fn prepare_request(
     resolved: &Resolved,
-    vars: &HashMap<String, SubstitutionValue<String>>,
+    vars: &HashMap<String, Value>,
 ) -> anyhow::Result<Substitution<HitmanRequest>> {
-    // FIXME This is still doing too much:
-    // - Substituting placeholders in the raw input text
-    // - Parsing the result as HTTP, yielding method, url, headers and body
-    // - Loading and parsing GraphQL
-    // - Generating variables for GraphQL (quite different for raw text
-    //   substitution)
-
     let input = read_to_string(resolved.http_file())?;
     let buf = match substitute(&input, vars)? {
         Complete(buf) => buf,
-        ValueMissing {
-            key,
-            fallback,
-            multiple,
-        } => {
-            return Ok(ValueMissing {
-                key,
-                fallback,
-                multiple,
-            })
-        }
+        ValueMissing { key } => return Ok(ValueMissing { key }),
     };
 
     let mut headers_buf = [httparse::EMPTY_HEADER; 64];
@@ -83,21 +106,10 @@ pub fn prepare_request(
 
                 for key in args {
                     let Some(value) = vars.get(&key.name) else {
-                        return Ok(ValueMissing {
-                            key: key.name,
-                            fallback: None,
-                            multiple: key.list,
-                        });
+                        return Ok(ValueMissing { key: key.name });
                     };
 
-                    match value {
-                        SubstitutionValue::Single(item) => {
-                            map.insert(key.name, serde_json::to_value(item)?);
-                        }
-                        SubstitutionValue::Multiple(items) => {
-                            map.insert(key.name, serde_json::to_value(items)?);
-                        }
-                    };
+                    map.insert(key.name, serde_json::to_value(value)?);
                 }
 
                 let variables = serde_json::to_value(map)?;
@@ -119,8 +131,6 @@ pub fn prepare_request(
     let mut headers = HeaderMap::new();
 
     for header in req.headers {
-        // The parse_http crate is weird, it fills the array with empty headers
-        // if a partial request is parsed.
         if header.name.is_empty() {
             break;
         }
@@ -138,185 +148,30 @@ pub fn prepare_request(
     }))
 }
 
-#[derive(Debug, Clone)]
-pub enum SubstitutionValue<T> {
-    Single(T),
-    Multiple(Vec<T>),
-}
-
 pub fn substitute(
     input: &str,
-    vars: &HashMap<String, SubstitutionValue<String>>,
+    vars: &HashMap<String, Value>,
 ) -> anyhow::Result<Substitution<String>> {
-    let mut output = String::new();
+    let last_missing = Arc::new(Mutex::new(None::<String>));
+    let ctx = TrackingContext {
+        vars: vars.clone(),
+        last_missing: last_missing.clone(),
+    };
 
-    for line in input.lines() {
-        let res = match substitute_line(line, vars)? {
-            Complete(l) => l,
-            m @ ValueMissing { .. } => return Ok(m),
-        };
-        output.push_str(&res);
-        output.push('\n');
-    }
+    let mut env = Environment::new();
+    env.set_undefined_behavior(UndefinedBehavior::Strict);
+    env.set_keep_trailing_newline(true);
 
-    Ok(Complete(output))
-}
+    let ctx_val = Value::from_object(ctx);
 
-fn substitute_line(
-    line: &str,
-    vars: &HashMap<String, SubstitutionValue<String>>,
-) -> anyhow::Result<Substitution<String>> {
-    let mut output = String::new();
-    let mut slice = line;
-    loop {
-        match slice.find("{{") {
-            None => {
-                if slice.contains("}}") {
-                    bail!("Syntax error");
-                }
-                output.push_str(slice);
-                break;
+    match env.render_str(input, ctx_val) {
+        Ok(output) => Ok(Complete(output)),
+        Err(e) => {
+            if let Some(key) = last_missing.lock().unwrap().take() {
+                return Ok(ValueMissing { key });
             }
-            Some(pos) => {
-                output.push_str(&slice[..pos]);
-                slice = &slice[pos..];
-
-                let Some(end) = slice.find("}}").map(|i| i + 2) else {
-                    bail!("Syntax error");
-                };
-
-                let rep = match substitute_inner(&slice[2..end - 2], vars) {
-                    Complete(v) => v,
-                    m @ ValueMissing { .. } => return Ok(m),
-                };
-
-                // Nested substitution
-                let rep = match substitute_line(&rep, vars)? {
-                    Complete(v) => v,
-                    m @ ValueMissing { .. } => return Ok(m),
-                };
-                output.push_str(&rep);
-
-                slice = &slice[end..];
-            }
+            Err(e.into())
         }
-    }
-
-    Ok(Complete(output))
-}
-
-#[derive(Debug)]
-struct Pair {
-    open: String,
-    close: String,
-}
-
-#[derive(Debug)]
-struct ListSyntax {
-    separator: String,
-    pair: Option<Pair>,
-}
-
-fn parse_list_syntax(s: &str) -> anyhow::Result<ListSyntax> {
-    let first_open = s.find('[').context("Invalid list syntax")?;
-    let first_close = s[first_open..]
-        .find(']')
-        .map(|i| i + first_open)
-        .context("Invalid list syntax")?;
-
-    let separator = &s[first_open + 1..first_close];
-
-    let Some(second_open) = s[first_close..].find('[').map(|i| i + first_close)
-    else {
-        return Ok(ListSyntax {
-            separator: separator.to_string(),
-            pair: None,
-        });
-    };
-
-    let second_close = s[second_open..]
-        .find(']')
-        .map(|i| i + second_open)
-        .context("Invalid list syntax")?;
-
-    let Some(third_open) =
-        s[second_close..].find('[').map(|i| i + second_close)
-    else {
-        return Ok(ListSyntax {
-            separator: separator.to_string(),
-            pair: Some(Pair {
-                open: s[second_open + 1..second_close].to_string(),
-                close: s[second_open + 1..second_close].to_string(),
-            }),
-        });
-    };
-
-    let third_close = s[third_open..]
-        .find(']')
-        .map(|i| i + third_open)
-        .context("Invalid list syntax")?;
-
-    Ok(ListSyntax {
-        separator: separator.to_string(),
-        pair: Some(Pair {
-            open: s[second_open + 1..second_close].to_string(),
-            close: s[third_open + 1..third_close].to_string(),
-        }),
-    })
-}
-
-fn substitute_inner(
-    inner: &str,
-    vars: &HashMap<String, SubstitutionValue<String>>,
-) -> Substitution<std::string::String> {
-    let mut parts = inner.split('|');
-
-    // Only valid with ascii_alphabetic, ascii_digit or underscores in key name
-    let valid_character = |c: &char| -> bool {
-        c.is_ascii_alphabetic() || c.is_ascii_digit() || *c == '_'
-    };
-
-    let key = parts.next().unwrap_or("").trim();
-    let parsed_key = key
-        .chars()
-        .skip_while(|c| !valid_character(c))
-        .take_while(valid_character)
-        .collect::<String>();
-
-    let fallback = parts.next().map(str::trim);
-
-    let list_syntax = parse_list_syntax(key);
-
-    let substitution = vars.get(&parsed_key).map(|v| match v {
-        SubstitutionValue::Single(s) => key.replace(&parsed_key, s),
-        SubstitutionValue::Multiple(list) => {
-            let syntax = list_syntax.as_ref().unwrap();
-
-            let start = inner.find(parsed_key.as_str()).unwrap();
-            let end = inner.rfind(']').unwrap();
-            let joined = list
-                .iter()
-                .map(|s| {
-                    if let Some(pair) = &syntax.pair {
-                        format!("{}{}{}", pair.open, s, pair.close)
-                    } else {
-                        s.to_string()
-                    }
-                })
-                .collect::<Vec<_>>()
-                .join(&syntax.separator);
-
-            key.replace(&inner[start..=end], &joined)
-        }
-    });
-
-    match substitution {
-        Some(s) => Complete(s),
-        None => ValueMissing {
-            key: parsed_key,
-            fallback: fallback.map(ToString::to_string),
-            multiple: list_syntax.is_ok(),
-        },
     }
 }
 
@@ -324,35 +179,26 @@ fn substitute_inner(
 mod tests {
     use super::*;
 
-    fn create_vars() -> HashMap<String, SubstitutionValue<String>> {
+    fn create_vars() -> HashMap<String, Value> {
         let mut vars = HashMap::new();
 
-        vars.insert(
-            "url".to_string(),
-            SubstitutionValue::Single("example.com".to_string()),
-        );
-        vars.insert(
-            "token".to_string(),
-            SubstitutionValue::Single("abc123".to_string()),
-        );
-        vars.insert(
-            "integer".to_string(),
-            SubstitutionValue::Single("42".to_string()),
-        );
-        vars.insert(
-            "api_url1".to_string(),
-            SubstitutionValue::Single("foo.com".to_string()),
-        );
-        vars.insert(
-            "nested".to_string(),
-            SubstitutionValue::Single("the answer is {{integer}}".to_string()),
-        );
+        vars.insert("url".to_string(), Value::from("example.com"));
+        vars.insert("token".to_string(), Value::from("abc123"));
+        vars.insert("integer".to_string(), Value::from(42i64));
+        vars.insert("api_url1".to_string(), Value::from("foo.com"));
         vars.insert(
             "list".to_string(),
-            SubstitutionValue::Multiple(vec![
-                "1".to_string(),
-                "2".to_string(),
-                "3".to_string(),
+            Value::from(vec![
+                Value::from("1"),
+                Value::from("2"),
+                Value::from("3"),
+            ]),
+        );
+        vars.insert(
+            "label".to_string(),
+            Value::from_serialize(&vec![
+                serde_json::json!({"value": "bug", "name": "bug"}),
+                serde_json::json!({"value": "docs", "name": "documentation"}),
             ]),
         );
 
@@ -370,7 +216,7 @@ mod tests {
     #[test]
     fn substitutes_single_variable() {
         let vars = create_vars();
-        let res = substitute("foo {{url}}\nbar\n", &vars).unwrap();
+        let res = substitute("foo {{ url }}\nbar\n", &vars).unwrap();
 
         assert_eq!(res, Complete("foo example.com\nbar\n".to_string()));
     }
@@ -378,57 +224,48 @@ mod tests {
     #[test]
     fn substitutes_integer() {
         let vars = create_vars();
-        let res = substitute("foo={{integer}}", &vars).unwrap();
+        let res = substitute("foo={{ integer }}", &vars).unwrap();
 
-        assert_eq!(res, Complete("foo=42\n".to_string()));
+        assert_eq!(res, Complete("foo=42".to_string()));
     }
 
     #[test]
     fn substitutes_placeholder_with_default_value() {
         let vars = create_vars();
-        let res = substitute("foo: {{url | fallback.com}}\n", &vars).unwrap();
+        let res =
+            substitute("foo: {{ url | default('fallback.com') }}\n", &vars)
+                .unwrap();
 
         assert_eq!(res, Complete("foo: example.com\n".to_string()));
     }
 
     #[test]
-    fn substitutes_default_value() {
+    fn uses_default_when_value_missing() {
         let vars = create_vars();
-        let res = substitute("foo: {{href | fallback.com }}\n", &vars).unwrap();
+        let res =
+            substitute("foo: {{ href | default('fallback.com') }}\n", &vars)
+                .unwrap();
+
+        assert_eq!(res, Complete("foo: fallback.com\n".to_string()));
+    }
+
+    #[test]
+    fn returns_value_missing_for_missing_variable() {
+        let vars = create_vars();
+        let res = substitute("foo: {{ href }}\n", &vars).unwrap();
 
         assert_eq!(
             res,
             ValueMissing {
                 key: "href".to_string(),
-                fallback: Some("fallback.com".to_string()),
-                multiple: false,
             }
         );
     }
 
     #[test]
-    fn substitutes_default_value_multiple() {
+    fn substitutes_single_variable_with_spaces() {
         let vars = create_vars();
-        let res = substitute(
-            r#"foo: {{href | "fallback.com", "foobar.com" }}\n"#,
-            &vars,
-        )
-        .unwrap();
-
-        assert_eq!(
-            res,
-            ValueMissing {
-                key: "href".to_string(),
-                fallback: Some("\"fallback.com\", \"foobar.com\"".to_string()),
-                multiple: false,
-            }
-        );
-    }
-
-    #[test]
-    fn substitutes_single_variable_with_speces() {
-        let vars = create_vars();
-        let res = substitute("foo {{ url  }}\nbar\n", &vars).unwrap();
+        let res = substitute("foo {{url}}\nbar\n", &vars).unwrap();
 
         assert_eq!(res, Complete("foo example.com\nbar\n".to_string()));
     }
@@ -436,7 +273,8 @@ mod tests {
     #[test]
     fn substitutes_one_variable_per_line() {
         let vars = create_vars();
-        let res = substitute("foo {{url}}\nbar {{token}}\n", &vars).unwrap();
+        let res =
+            substitute("foo {{ url }}\nbar {{ token }}\n", &vars).unwrap();
 
         assert_eq!(res, Complete("foo example.com\nbar abc123\n".to_string()));
     }
@@ -444,61 +282,10 @@ mod tests {
     #[test]
     fn substitutes_variable_on_the_same_line() {
         let vars = create_vars();
-        let res = substitute("foo {{url}}, bar {{token}}\n", &vars).unwrap();
+        let res =
+            substitute("foo {{ url }}, bar {{ token }}\n", &vars).unwrap();
 
         assert_eq!(res, Complete("foo example.com, bar abc123\n".to_string()));
-    }
-
-    #[test]
-    fn substitutes_nested_variable() {
-        let vars = create_vars();
-        let res = substitute("# {{nested}}!\n", &vars).unwrap();
-
-        assert_eq!(res, Complete("# the answer is 42!\n".to_string()));
-    }
-
-    #[test]
-    fn substitutes_only_characters_inside_quotes() {
-        let vars = create_vars();
-        let res = substitute("foo: {{ \"integer\" }}", &vars).unwrap();
-
-        assert_eq!(res, Complete("foo: \"42\"\n".to_string()));
-    }
-
-    #[test]
-    fn substitutes_only_characters_inside_list() {
-        let vars = create_vars();
-        let res = substitute("foo: {{ [url] }}", &vars).unwrap();
-
-        assert_eq!(res, Complete("foo: [example.com]\n".to_string()));
-    }
-
-    #[test]
-    fn substitutes_only_characters_inside_list_inside_quotes() {
-        let vars = create_vars();
-        let res = substitute("foo: {{ [\"url\"] }}", &vars).unwrap();
-
-        assert_eq!(res, Complete("foo: [\"example.com\"]\n".to_string()));
-    }
-
-    #[test]
-    fn substitutes_variable_on_the_same_line_in_list() {
-        let vars = create_vars();
-        let res = substitute("foo: [{{ \"url\" }}, {{ \"integer\" }}]", &vars)
-            .unwrap();
-
-        assert_eq!(
-            res,
-            Complete("foo: [\"example.com\", \"42\"]\n".to_string())
-        );
-    }
-
-    #[test]
-    fn substitutes_only_numbers_inside_quote() {
-        let vars = create_vars();
-        let res = substitute("foo: {{ \"integer\" }}", &vars).unwrap();
-
-        assert_eq!(res, Complete("foo: \"42\"\n".to_string()));
     }
 
     #[test]
@@ -506,71 +293,58 @@ mod tests {
         let vars = create_vars();
         let res = substitute("foo: {{ api_url1 }}", &vars).unwrap();
 
-        assert_eq!(res, Complete("foo: foo.com\n".to_string()));
+        assert_eq!(res, Complete("foo: foo.com".to_string()));
     }
 
     #[test]
-    fn fails_for_unmatched_open() {
+    fn substitutes_list_joined() {
         let vars = create_vars();
-        let res = substitute("foo {{url\n", &vars);
+        let res = substitute("foo: {{ list | join('') }}", &vars).unwrap();
 
-        assert!(res.is_err());
-    }
-
-    #[test]
-    fn fails_for_unmatched_close() {
-        let vars = create_vars();
-        let res = substitute("foo url}} bar\n", &vars);
-
-        assert!(res.is_err());
-    }
-
-    #[test]
-    fn substitutes_list() {
-        let vars = create_vars();
-        let res = substitute("foo: {{ list[] }}", &vars).unwrap();
-
-        assert_eq!(res, Complete("foo: 123\n".to_string()));
+        assert_eq!(res, Complete("foo: 123".to_string()));
     }
 
     #[test]
     fn substitutes_comma_separated_list() {
         let vars = create_vars();
-        let res = substitute("foo: [ {{ list [, ] }} ]", &vars).unwrap();
-
-        assert_eq!(res, Complete("foo: [ 1, 2, 3 ]\n".to_string()));
-    }
-
-    #[test]
-    fn substitutes_list_multi_char_separator() {
-        let vars = create_vars();
-        let res = substitute("foo: {{ list [>>, <<]}}", &vars).unwrap();
-
-        assert_eq!(res, Complete("foo: 1>>, <<2>>, <<3\n".to_string()));
-    }
-
-    #[test]
-    fn substitutes_list_custom_open_pair() {
-        let vars = create_vars();
-        let res = substitute("foo: {{ list [:] ['] }}", &vars).unwrap();
-
-        assert_eq!(res, Complete("foo: '1':'2':'3'\n".to_string()));
-    }
-
-    #[test]
-    fn substitutes_list_custom_open_and_close_pair() {
-        let vars = create_vars();
         let res =
-            substitute("foo: {{ list   [ - ] [<<][>>] }}", &vars).unwrap();
+            substitute("foo: [ {{ list | join(', ') }} ]", &vars).unwrap();
 
-        assert_eq!(res, Complete("foo: <<1>> - <<2>> - <<3>>\n".to_string()));
+        assert_eq!(res, Complete("foo: [ 1, 2, 3 ]".to_string()));
     }
 
     #[test]
-    fn substitutes_list_default_value_multiple() {
+    fn substitutes_list_quoted_join() {
         let vars = create_vars();
         let res = substitute(
-            "foo: {{ missing_list   [ - ] [<<][>>] | 9 8 7 }}",
+            r#"foo: ["{{ list | join('", "') }}"]"#,
+            &vars,
+        )
+        .unwrap();
+
+        assert_eq!(
+            res,
+            Complete(r#"foo: ["1", "2", "3"]"#.to_string())
+        );
+    }
+
+    #[test]
+    fn substitutes_list_of_objects() {
+        let vars = create_vars();
+        let res = substitute(
+            r#"{% for l in label %}"{{ l.value }}"{% if not loop.last %}, {% endif %}{% endfor %}"#,
+            &vars,
+        )
+        .unwrap();
+
+        assert_eq!(res, Complete(r#""bug", "docs""#.to_string()));
+    }
+
+    #[test]
+    fn returns_value_missing_when_var_missing_but_other_has_default() {
+        let vars = create_vars();
+        let res = substitute(
+            "{{ url | default('x') }} {{ missing }}",
             &vars,
         )
         .unwrap();
@@ -578,44 +352,16 @@ mod tests {
         assert_eq!(
             res,
             ValueMissing {
-                key: "missing_list".to_string(),
-                fallback: Some("9 8 7".to_string()),
-                multiple: true,
+                key: "missing".to_string(),
             }
         );
     }
 
     #[test]
-    fn substitutes_list_default_value_multiple_with_separator() {
+    fn fails_for_template_syntax_error() {
         let vars = create_vars();
-        let res = substitute(
-            "foo: [ {{ missing_list   [ - ] [<<][>>] | \"9\", \"8\", \"7\" }} ]",
-            &vars,
-        )
-        .unwrap();
+        let res = substitute("{% if %}", &vars);
 
-        assert_eq!(
-            res,
-            ValueMissing {
-                key: "missing_list".to_string(),
-                fallback: Some("\"9\", \"8\", \"7\"".to_string()),
-                multiple: true,
-            }
-        );
-    }
-
-    #[test]
-    fn substitutes_list_creates_object() {
-        let vars = create_vars();
-        let res =
-            substitute("foo: {{ list [, ] [{ \"Id\": \"] [\" }] }}", &vars)
-                .unwrap();
-
-        assert_eq!(
-            res,
-            Complete(
-                "foo: { \"Id\": \"1\" }, { \"Id\": \"2\" }, { \"Id\": \"3\" }\n".to_string()
-            )
-        );
+        assert!(res.is_err());
     }
 }
