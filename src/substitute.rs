@@ -27,31 +27,13 @@ pub enum Substitution<T> {
 
 pub use Substitution::{Complete, ValueMissing};
 
-// Used by UI layer to track whether a single or multiple values were selected
-#[derive(Debug, Clone)]
-pub enum SubstitutionValue<T> {
-    Single(T),
-    Multiple(Vec<T>),
-}
-
 thread_local! {
     static MISSING: Cell<Option<String>> = const { Cell::new(None) };
 }
 
+#[derive(Debug)]
 struct TrackingContext {
     vars: HashMap<String, Value>,
-}
-
-impl std::fmt::Debug for TrackingContext {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "TrackingContext")
-    }
-}
-
-impl std::fmt::Display for TrackingContext {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "TrackingContext")
-    }
 }
 
 impl Object for TrackingContext {

@@ -1,6 +1,5 @@
 use crossterm::event::Event;
 use fuzzy_matcher::skim::SkimMatcherV2;
-use hitman::substitute::SubstitutionValue;
 use minijinja::Value as JinjaValue;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
@@ -14,6 +13,8 @@ use ratatui::{
     Frame,
 };
 use tui_input::{backend::crossterm::EventHandler, Input};
+
+use crate::ui::app::SubstitutionValue;
 
 use super::{
     keymap::{mapkey, KeyMapping},

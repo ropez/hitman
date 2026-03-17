@@ -33,7 +33,6 @@ use hitman::{
     substitute::{
         prepare_request,
         Substitution::{Complete, ValueMissing},
-        SubstitutionValue,
     },
 };
 use minijinja::Value as JinjaValue;
@@ -50,6 +49,13 @@ use super::{
     select::{RequestSelector, Select, SelectIntent, SelectItem},
     Component, InteractiveComponent, PromptComponent, PromptIntent,
 };
+
+// Used by UI layer to track whether a single or multiple values were selected
+#[derive(Debug, Clone)]
+pub enum SubstitutionValue<T> {
+    Single(T),
+    Multiple(Vec<T>),
+}
 
 pub trait Screen {
     type B: Backend;
