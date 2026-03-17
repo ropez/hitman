@@ -17,7 +17,6 @@ use super::{
 
 pub struct SimplePrompt {
     title: String,
-    fallback: Option<String>,
     input: Input,
 }
 
@@ -25,18 +24,12 @@ impl SimplePrompt {
     pub fn new(title: String) -> Self {
         Self {
             title,
-            fallback: None,
             input: Input::default(),
         }
     }
 
     fn value(&self) -> JinjaValue {
-        let input_value = self.input.value().to_string();
-        if input_value.is_empty() {
-            JinjaValue::from(self.fallback.clone().unwrap_or(input_value))
-        } else {
-            JinjaValue::from(input_value)
-        }
+        JinjaValue::from(self.input.value().to_string())
     }
 }
 
@@ -48,16 +41,9 @@ impl Component for SimplePrompt {
         let inner = block.inner(area);
 
         let input_value = self.input.value();
-        let mut spans = Vec::new();
-        spans.push(Span::from("> "));
-        spans.push(Span::from(input_value));
+        let spans =
+            vec![Span::from("> ").cyan(), Span::from(input_value).white()];
         let cur = spans[0].width() as u16;
-
-        if input_value.is_empty() {
-            if let Some(value) = &self.fallback {
-                spans.push(Span::from(value).dark_gray());
-            }
-        }
 
         frame.render_widget(Clear, area);
         frame.render_widget(
