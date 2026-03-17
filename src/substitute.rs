@@ -113,6 +113,8 @@ pub fn prepare_request(
     let mut headers = HeaderMap::new();
 
     for header in req.headers {
+        // The parse_http crate is weird, it fills the array with empty headers
+        // if a partial request is parsed.
         if header.name.is_empty() {
             break;
         }
