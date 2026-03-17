@@ -4,5 +4,5 @@ Accept: application/vnd.github+json
 {
     "title": "Found a bug",
     "body": "I'm having a problem with this.",
-    "labels": [{% for l in label %}"{{ l.value }}"{% if not loop.last %}, {% endif %}{% endfor %}],
+    "labels": ["{{ label | map(attribute="value") | join('", "') }}"],
 }
