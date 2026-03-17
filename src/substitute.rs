@@ -1,4 +1,5 @@
-use std::sync::{Arc, Mutex};
+use std::cell::Cell;
+use std::sync::Arc;
 
 use anyhow::Context;
 use httparse::Status;
@@ -33,9 +34,12 @@ pub enum SubstitutionValue<T> {
     Multiple(Vec<T>),
 }
 
+thread_local! {
+    static MISSING: Cell<Option<String>> = const { Cell::new(None) };
+}
+
 struct TrackingContext {
     vars: HashMap<String, Value>,
-    last_missing: Arc<Mutex<Option<String>>>,
 }
 
 impl std::fmt::Debug for TrackingContext {
@@ -56,12 +60,7 @@ impl Object for TrackingContext {
         match self.vars.get(key_str) {
             Some(v) => Some(v.clone()),
             None => {
-                // Track the last missing key. Using "last" rather than
-                // "first" correctly handles {{ var | default('x') }} {{ other
-                // }}: the default filter handles `var`
-                // silently, then `other` causes the render to
-                // fail, and we report `other`.
-                *self.last_missing.lock().unwrap() = Some(key_str.to_string());
+                MISSING.set(Some(key_str.to_string()));
                 Some(Value::UNDEFINED)
             }
         }
@@ -153,11 +152,8 @@ pub fn substitute(
     input: &str,
     vars: &HashMap<String, Value>,
 ) -> anyhow::Result<Substitution<String>> {
-    let last_missing = Arc::new(Mutex::new(None::<String>));
-    let ctx = TrackingContext {
-        vars: vars.clone(),
-        last_missing: last_missing.clone(),
-    };
+    MISSING.set(None);
+    let ctx = TrackingContext { vars: vars.clone() };
 
     let mut env = Environment::new();
     env.set_undefined_behavior(UndefinedBehavior::Strict);
@@ -168,7 +164,7 @@ pub fn substitute(
     match env.render_str(input, ctx_val) {
         Ok(output) => Ok(Complete(output)),
         Err(e) => {
-            if let Some(key) = last_missing.lock().unwrap().take() {
+            if let Some(key) = MISSING.take() {
                 return Ok(ValueMissing { key });
             }
             Err(e.into())
