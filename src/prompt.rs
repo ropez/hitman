@@ -178,15 +178,9 @@ fn select_replacement(key: &str, values: &[Value]) -> Result<JinjaValue> {
             .with_page_size(15)
             .prompt()?;
 
-    let value = &values[selected.index];
-    let jinja_val = match value {
-        Value::Table(t) => match t.get("value") {
-            Some(v) => JinjaValue::from_serialize(v),
-            None => JinjaValue::from_serialize(value),
-        },
-        _ => JinjaValue::from_serialize(value),
-    };
-    Ok(jinja_val)
+    Ok(JinjaValue::from(list_option_to_string(
+        key, values, &selected,
+    )?))
 }
 
 fn select_replacement_multiple(
@@ -226,6 +220,21 @@ fn values_to_list_options(values: &[Value]) -> Vec<ListOption<String>> {
             )
         })
         .collect()
+}
+
+fn list_option_to_string(
+    key: &str,
+    values: &[Value],
+    selected: &ListOption<String>,
+) -> Result<String> {
+    match &values[selected.index] {
+        Value::Table(t) => match t.get("value") {
+            Some(Value::String(value)) => Ok(value.clone()),
+            Some(value) => Ok(value.to_string()),
+            _ => bail!("Replacement not found: {key}"),
+        },
+        other => Ok(other.to_string()),
+    }
 }
 
 #[cfg(test)]
