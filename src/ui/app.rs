@@ -134,7 +134,7 @@ pub enum Intent {
 
 pub enum AskForValueParams {
     Prompt,
-    Select { values: Vec<Value> },
+    Select { values: Vec<Value>, multiple: bool },
 }
 
 impl App {
@@ -338,7 +338,7 @@ impl App {
                 resolved,
                 prepared_request,
             }),
-            ValueMissing { key } => {
+            ValueMissing { key, multiple } => {
                 let scope = load_env(&self.target, &resolved, &[])?;
 
                 match scope.lookup(&key)? {
@@ -351,7 +351,10 @@ impl App {
                             key,
                             file_path,
                             pending_vars: vars,
-                            params: AskForValueParams::Select { values },
+                            params: AskForValueParams::Select {
+                                values,
+                                multiple,
+                            },
                         })
                     }
                     Replacement::ValueNotFound { key } => {
@@ -442,13 +445,13 @@ fn create_prompt_component(
     params: AskForValueParams,
 ) -> Box<dyn PromptComponent> {
     match params {
-        AskForValueParams::Select { values } => Box::new(
+        AskForValueParams::Select { values, multiple } => Box::new(
             Select::new(
                 format!("Select substitution value for {{{{{key}}}}}"),
                 key.into(),
                 values,
             )
-            .with_multiple(true),
+            .with_multiple(multiple),
         ),
 
         AskForValueParams::Prompt => {

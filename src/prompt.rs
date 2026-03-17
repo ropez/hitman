@@ -47,7 +47,7 @@ pub fn get_interaction() -> Box<dyn UserInteraction> {
 
 pub trait UserInteraction {
     fn prompt(&self, key: &str) -> Result<String>;
-    fn select(&self, key: &str, values: &[Value]) -> Result<String>;
+    fn select(&self, key: &str, values: &[Value]) -> Result<JinjaValue>;
     fn select_multiple(
         &self,
         key: &str,
@@ -68,14 +68,18 @@ where
     loop {
         match prepare_request(resolved, &vars)? {
             Complete(req) => return Ok(req),
-            ValueMissing { key } => {
+            ValueMissing { key, multiple } => {
                 let value = match scope.lookup(&key)? {
                     Replacement::Value(value) => JinjaValue::from(value),
                     Replacement::ValueNotFound { key } => {
                         JinjaValue::from(interaction.prompt(&key)?)
                     }
                     Replacement::MultipleValuesFound { key, values } => {
-                        interaction.select_multiple(&key, &values)?
+                        if multiple {
+                            interaction.select_multiple(&key, &values)?
+                        } else {
+                            interaction.select(&key, &values)?
+                        }
                     }
                 };
 
@@ -106,7 +110,7 @@ impl UserInteraction for NoUserInteraction {
         bail!("Replacement not found: {key}");
     }
 
-    fn select(&self, key: &str, values: &[toml::Value]) -> Result<String> {
+    fn select(&self, key: &str, values: &[toml::Value]) -> Result<JinjaValue> {
         let suggestions = self.get_suggestions(key, values);
         bail!("Replacement not selected: {key}\nSuggestions:\n{suggestions}");
     }
@@ -128,7 +132,7 @@ impl UserInteraction for CliUserInteraction {
         prompt_user(key)
     }
 
-    fn select(&self, key: &str, values: &[toml::Value]) -> Result<String> {
+    fn select(&self, key: &str, values: &[toml::Value]) -> Result<JinjaValue> {
         select_replacement(key, values)
     }
 
@@ -166,7 +170,7 @@ fn prompt_for_date(key: &str) -> Result<Option<String>> {
     Ok(res.map(formatter))
 }
 
-fn select_replacement(key: &str, values: &[Value]) -> Result<String> {
+fn select_replacement(key: &str, values: &[Value]) -> Result<JinjaValue> {
     let list_options = values_to_list_options(values);
     let selected =
         Select::new(&format!("Select value for {key}"), list_options)
@@ -174,7 +178,15 @@ fn select_replacement(key: &str, values: &[Value]) -> Result<String> {
             .with_page_size(15)
             .prompt()?;
 
-    Ok(JinjaValue::from_serialize(&values[selected.index]).to_string())
+    let value = &values[selected.index];
+    let jinja_val = match value {
+        Value::Table(t) => match t.get("value") {
+            Some(v) => JinjaValue::from_serialize(v),
+            None => JinjaValue::from_serialize(value),
+        },
+        _ => JinjaValue::from_serialize(value),
+    };
+    Ok(jinja_val)
 }
 
 fn select_replacement_multiple(

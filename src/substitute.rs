@@ -22,13 +22,14 @@ use crate::{
 #[derive(Debug, PartialEq, Eq)]
 pub enum Substitution<T> {
     Complete(T),
-    ValueMissing { key: String },
+    ValueMissing { key: String, multiple: bool },
 }
 
 pub use Substitution::{Complete, ValueMissing};
 
 thread_local! {
     static MISSING: Cell<Option<String>> = const { Cell::new(None) };
+    static MISSING_MULTIPLE: Cell<bool> = const { Cell::new(false) };
 }
 
 #[derive(Debug)]
@@ -56,7 +57,9 @@ pub fn prepare_request(
     let input = read_to_string(resolved.http_file())?;
     let buf = match substitute(&input, vars)? {
         Complete(buf) => buf,
-        ValueMissing { key } => return Ok(ValueMissing { key }),
+        ValueMissing { key, multiple } => {
+            return Ok(ValueMissing { key, multiple })
+        }
     };
 
     let mut headers_buf = [httparse::EMPTY_HEADER; 64];
@@ -88,7 +91,10 @@ pub fn prepare_request(
 
                 for key in args {
                     let Some(value) = vars.get(&key.name) else {
-                        return Ok(ValueMissing { key: key.name });
+                        return Ok(ValueMissing {
+                            key: key.name,
+                            multiple: false,
+                        });
                     };
 
                     map.insert(key.name, serde_json::to_value(value)?);
@@ -137,11 +143,20 @@ pub fn substitute(
     vars: &HashMap<String, Value>,
 ) -> anyhow::Result<Substitution<String>> {
     MISSING.set(None);
+    MISSING_MULTIPLE.set(false);
     let ctx = TrackingContext { vars: vars.clone() };
 
     let mut env = Environment::new();
     env.set_undefined_behavior(UndefinedBehavior::Strict);
     env.set_keep_trailing_newline(true);
+    env.add_filter("select_multiple", |v: Value| {
+        MISSING_MULTIPLE.set(true);
+        v
+    });
+    env.add_filter("select_one", |v: Value| {
+        MISSING_MULTIPLE.set(false);
+        v
+    });
 
     let ctx_val = Value::from_object(ctx);
 
@@ -149,7 +164,10 @@ pub fn substitute(
         Ok(output) => Ok(Complete(output)),
         Err(e) => {
             if let Some(key) = MISSING.take() {
-                return Ok(ValueMissing { key });
+                return Ok(ValueMissing {
+                    key,
+                    multiple: MISSING_MULTIPLE.take(),
+                });
             }
             Err(e.into())
         }
@@ -239,6 +257,7 @@ mod tests {
             res,
             ValueMissing {
                 key: "href".to_string(),
+                multiple: false,
             }
         );
     }
@@ -325,6 +344,21 @@ mod tests {
             res,
             ValueMissing {
                 key: "missing".to_string(),
+                multiple: false,
+            }
+        );
+    }
+
+    #[test]
+    fn returns_multiple_true_when_select_multiple_filter_used() {
+        let vars = create_vars();
+        let res = substitute("{{ missing | select_multiple }}", &vars).unwrap();
+
+        assert_eq!(
+            res,
+            ValueMissing {
+                key: "missing".to_string(),
+                multiple: true,
             }
         );
     }
