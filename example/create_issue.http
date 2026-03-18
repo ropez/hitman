@@ -4,5 +4,5 @@ Accept: application/vnd.github+json
 {
     "title": "Found a bug",
     "body": "I'm having a problem with this.",
-    "labels": ["{{ label | select_multiple | map(attribute="value") | join('", "') }}"],
+    "labels": ["{{ label | select_multiple | join('", "') }}"],
 }

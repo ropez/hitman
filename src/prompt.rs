@@ -207,8 +207,10 @@ fn select_replacement_multiple(
 
     let items: Vec<JinjaValue> = selected
         .iter()
-        .map(|item| JinjaValue::from_serialize(&values[item.index]))
-        .collect();
+        .map(|item| {
+            list_option_to_string(key, values, item).map(JinjaValue::from)
+        })
+        .collect::<Result<Vec<_>>>()?;
 
     Ok(JinjaValue::from(items))
 }
