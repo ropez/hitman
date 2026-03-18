@@ -12,11 +12,11 @@ use std::{
 use anyhow::{Context, Result};
 use crossterm::event::{self, Event, KeyEventKind};
 use ratatui::{
+    Frame, Terminal,
     backend::Backend,
     layout::{Constraint, Direction, Layout, Margin, Rect},
     style::Stylize,
     widgets::Paragraph,
-    Frame, Terminal,
 };
 use tokio::task::JoinHandle;
 use toml::Value;
@@ -27,21 +27,20 @@ use hitman::{
         set_target, update_data,
     },
     extract::extract_variables,
-    request::{build_client, do_request, HitmanRequest},
-    resolve::{find_root_dir, resolve_path, Resolved},
+    request::{HitmanRequest, build_client, do_request},
+    resolve::{Resolved, find_root_dir, resolve_path},
     scope::Replacement,
     substitute::{
-        prepare_request,
         Substitution::{Complete, ValueMissing},
-        SubstitutionValue,
+        SubstitutionValue, prepare_request,
     },
 };
 
 use super::{
-    centered,
+    Component, InteractiveComponent, PromptComponent, PromptIntent, centered,
     datepicker::DatePicker,
     help::Help,
-    keymap::{mapkey, KeyMapping},
+    keymap::{KeyMapping, mapkey},
     output::{HttpMessage, HttpRequestMessage, OutputView},
     output::{HttpRequestInfo, RequestStatus},
     progress::Progress,
@@ -49,7 +48,6 @@ use super::{
     select::{
         PromptSelectItem, RequestSelector, Select, SelectIntent, SelectItem,
     },
-    Component, InteractiveComponent, PromptComponent, PromptIntent,
 };
 
 pub trait Screen {
@@ -306,13 +304,13 @@ impl App {
             return Ok(self.handle_event(&event));
         }
 
-        if let AppState::RunningRequest { handle, .. } = &mut self.state {
-            if handle.is_finished() {
-                return Ok(match handle.await {
-                    Ok(res) => Some(Intent::ShowResult(res)),
-                    Err(err) => Some(Intent::ShowError(err.to_string())),
-                });
-            }
+        if let AppState::RunningRequest { handle, .. } = &mut self.state
+            && handle.is_finished()
+        {
+            return Ok(match handle.await {
+                Ok(res) => Some(Intent::ShowResult(res)),
+                Err(err) => Some(Intent::ShowError(err.to_string())),
+            });
         }
 
         Ok(None)
@@ -506,93 +504,93 @@ impl InteractiveComponent for App {
     fn handle_event(&mut self, event: &Event) -> Option<Self::Intent> {
         use Intent::*;
 
-        if let Event::Key(key) = event {
-            if key.kind == KeyEventKind::Press {
-                match &mut self.state {
-                    AppState::PendingValue {
-                        key,
-                        file_path,
-                        pending_vars,
-                        component,
-                        ..
-                    } => {
-                        return component.handle_prompt(event).map(|intent| {
-                            convert_prompt_intent(
-                                key,
-                                file_path,
-                                pending_vars,
-                                intent,
-                            )
-                        });
+        if let Event::Key(key) = event
+            && key.kind == KeyEventKind::Press
+        {
+            match &mut self.state {
+                AppState::PendingValue {
+                    key,
+                    file_path,
+                    pending_vars,
+                    component,
+                    ..
+                } => {
+                    return component.handle_prompt(event).map(|intent| {
+                        convert_prompt_intent(
+                            key,
+                            file_path,
+                            pending_vars,
+                            intent,
+                        )
+                    });
+                }
+                AppState::ShowHelp => match mapkey(event) {
+                    KeyMapping::Abort
+                    | KeyMapping::Accept
+                    | KeyMapping::ToggleHelp => {
+                        return Some(Intent::Abort);
                     }
-                    AppState::ShowHelp => match mapkey(event) {
-                        KeyMapping::Abort
-                        | KeyMapping::Accept
-                        | KeyMapping::ToggleHelp => {
-                            return Some(Intent::Abort);
-                        }
-                        _ => (),
-                    },
-                    AppState::Idle => {
-                        if let Some(intent) =
-                            self.request_selector.handle_event(event)
-                        {
-                            if let Some(intent) = convert_select_intent(intent)
-                            {
-                                return Some(intent);
+                    _ => (),
+                },
+                AppState::Idle => {
+                    if let Some(intent) =
+                        self.request_selector.handle_event(event)
+                        && let Some(intent) = convert_select_intent(intent)
+                    {
+                        return Some(intent);
+                    }
+
+                    self.output_view.handle_event(event);
+
+                    return self.handle_global_key(event);
+                }
+
+                AppState::RunningRequest { handle, .. } => {
+                    if let KeyMapping::Abort = mapkey(event) {
+                        handle.abort();
+                        return Some(Abort);
+                    }
+                }
+
+                AppState::NewRequestPrompt { prompt } => {
+                    if let Some(intent) = prompt.handle_prompt(event) {
+                        match intent {
+                            PromptIntent::Abort => {
+                                return Some(Abort);
                             }
-                        }
-
-                        self.output_view.handle_event(event);
-
-                        return self.handle_global_key(event);
-                    }
-
-                    AppState::RunningRequest { handle, .. } => {
-                        if let KeyMapping::Abort = mapkey(event) {
-                            handle.abort();
-                            return Some(Abort);
-                        }
-                    }
-
-                    AppState::NewRequestPrompt { prompt } => {
-                        if let Some(intent) = prompt.handle_prompt(event) {
-                            match intent {
-                                PromptIntent::Abort => {
-                                    return Some(Abort);
+                            PromptIntent::Accept(s) => match s {
+                                SubstitutionValue::Single(s) => {
+                                    return Some(AcceptNewRequest(s));
                                 }
-                                PromptIntent::Accept(s) => match s {
+                                SubstitutionValue::Multiple(_) => {
+                                    unreachable!(
+                                        "Can never accept multiple requests"
+                                    )
+                                }
+                            },
+                        }
+                    }
+                }
+
+                AppState::SelectTarget { component } => {
+                    if let Some(intent) = component.handle_event(event) {
+                        match intent {
+                            SelectIntent::Abort => {
+                                return Some(Abort);
+                            }
+                            SelectIntent::Accept(s) => {
+                                match s {
                                     SubstitutionValue::Single(s) => {
-                                        return Some(AcceptNewRequest(s))
+                                        return Some(AcceptSelectTarget(s));
                                     }
                                     SubstitutionValue::Multiple(_) => {
-                                        unreachable!("Can never accept multiple requests")
+                                        unreachable!(
+                                            "Can never select multiple targets"
+                                        )
                                     }
-                                },
+                                };
                             }
-                        }
-                    }
-
-                    AppState::SelectTarget { component } => {
-                        if let Some(intent) = component.handle_event(event) {
-                            match intent {
-                                SelectIntent::Abort => {
-                                    return Some(Abort);
-                                }
-                                SelectIntent::Accept(s) => {
-                                    match s {
-                                        SubstitutionValue::Single(s) => {
-                                            return Some(AcceptSelectTarget(s))
-                                        }
-                                        SubstitutionValue::Multiple(_) => {
-                                            unreachable!(
-                                                "Can never select multiple targets"
-                                            )
-                                        }
-                                    };
-                                }
-                                SelectIntent::Change(_) => (),
-                            }
+                            SelectIntent::Change(_) => (),
                         }
                     }
                 }

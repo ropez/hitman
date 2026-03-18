@@ -7,7 +7,7 @@ use ratatui::{
     widgets::{Block, BorderType, Clear, Paragraph},
 };
 
-use super::{centered, Component};
+use super::{Component, centered};
 
 pub struct Progress;
 

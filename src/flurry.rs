@@ -1,7 +1,7 @@
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use futures::future::join_all;
 use log::warn;
-use spinoff::{spinners, Color, Spinner, Streams};
+use spinoff::{Color, Spinner, Streams, spinners};
 use std::time::Duration;
 use tokio::spawn;
 
@@ -10,7 +10,7 @@ use crate::{
     request::{build_client, do_request},
     resolve::Resolved,
     scope::Scope,
-    util::{split_work, IterExt},
+    util::{IterExt, split_work},
 };
 
 pub async fn flurry_attack(
@@ -28,7 +28,9 @@ pub async fn flurry_attack(
 
     let client = build_client(&resolved.root_dir)?;
 
-    warn!("# Sending {flurry_size} requests on {connections} parallel connections...");
+    warn!(
+        "# Sending {flurry_size} requests on {connections} parallel connections..."
+    );
 
     let interaction = get_interaction();
     let req =

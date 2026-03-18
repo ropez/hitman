@@ -1,6 +1,6 @@
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use fuzzy_matcher::skim::SkimMatcherV2;
-use inquire::{list_option::ListOption, DateSelect, MultiSelect, Select, Text};
+use inquire::{DateSelect, MultiSelect, Select, Text, list_option::ListOption};
 use std::{collections::HashMap, env, string::ToString};
 use toml::Value;
 
@@ -9,14 +9,13 @@ use crate::{
     resolve::Resolved,
     scope::{Replacement, Scope},
     substitute::{
-        prepare_request,
         Substitution::{Complete, ValueMissing},
-        SubstitutionValue,
+        SubstitutionValue, prepare_request,
     },
 };
 
 fn set_boolean(name: &str, value: bool) {
-    env::set_var(name, if value { "y" } else { "n" });
+    unsafe { env::set_var(name, if value { "y" } else { "n" }) };
 }
 
 fn get_boolean(name: &str) -> bool {
@@ -164,11 +163,11 @@ impl UserInteraction for CliUserInteraction {
 fn prompt_user(key: &str, fallback: Option<&str>) -> Result<String> {
     let fb = fallback.unwrap_or("");
 
-    if key.ends_with("_date") || key.ends_with("Date") {
-        if let Some(date) = prompt_for_date(key)? {
-            return Ok(date);
-        }
-    }
+    if (key.ends_with("_date") || key.ends_with("Date"))
+        && let Some(date) = prompt_for_date(key)?
+    {
+        return Ok(date);
+    };
 
     let input = Text::new(&format!("Enter value for {key}"))
         .with_default(fb)

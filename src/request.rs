@@ -6,22 +6,22 @@ use std::{
     time::Duration,
 };
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use futures::StreamExt;
 use graphql_parser::query::{
     Definition, OperationDefinition, VariableDefinition,
 };
 
-use log::{info, log_enabled, warn, Level};
+use log::{Level, info, log_enabled, warn};
 use reqwest::{
-    header::{HeaderMap, CONTENT_TYPE},
     Client, Method, Response, Url,
+    header::{CONTENT_TYPE, HeaderMap},
 };
-use serde_json::{json, Value};
-use spinoff::{spinners, Color, Spinner, Streams};
+use serde_json::{Value, json};
+use spinoff::{Color, Spinner, Streams, spinners};
 
 use crate::{
-    env::{update_data, HitmanCookieJar},
+    env::{HitmanCookieJar, update_data},
     extract::extract_variables,
     prompt::{get_interaction, prepare_request_interactive},
     resolve::Resolved,
@@ -132,10 +132,10 @@ pub async fn make_request(resolved: &Resolved, scope: &Scope) -> Result<()> {
     print_response(&response)?;
 
     // Subscription for graphql is a stream
-    if let Some(content_type) = response.headers().get(CONTENT_TYPE) {
-        if content_type.to_str()?.contains("text/event-stream") {
-            return parse_stream_output(response).await;
-        }
+    if let Some(content_type) = response.headers().get(CONTENT_TYPE)
+        && content_type.to_str()?.contains("text/event-stream")
+    {
+        return parse_stream_output(response).await;
     }
 
     if let Ok(json) = response.json::<Value>().await {
@@ -265,7 +265,7 @@ where
     };
 
     let args = match doc.definitions.first() {
-        Some(Definition::Operation(ref op)) => match op {
+        Some(Definition::Operation(op)) => match op {
             OperationDefinition::Query(q) => variables(&q.variable_definitions),
             OperationDefinition::Mutation(m) => {
                 variables(&m.variable_definitions)

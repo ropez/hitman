@@ -1,18 +1,17 @@
 use crossterm::event::Event;
 use hitman::substitute::SubstitutionValue;
 use ratatui::{
+    Frame,
     layout::Rect,
     style::Stylize,
     text::{Line, Span},
     widgets::{Block, Clear, Paragraph},
-    Frame,
 };
-use tui_input::{backend::crossterm::EventHandler, Input};
+use tui_input::{Input, backend::crossterm::EventHandler};
 
 use super::{
-    centered,
-    keymap::{mapkey, KeyMapping},
-    Component, PromptComponent, PromptIntent,
+    Component, PromptComponent, PromptIntent, centered,
+    keymap::{KeyMapping, mapkey},
 };
 
 pub struct SimplePrompt {
@@ -62,10 +61,10 @@ impl Component for SimplePrompt {
         spans.push(Span::from(input_value));
         let cur = spans[0].width() as u16;
 
-        if input_value.is_empty() {
-            if let Some(value) = &self.fallback {
-                spans.push(Span::from(value).dark_gray());
-            }
+        if input_value.is_empty()
+            && let Some(value) = &self.fallback
+        {
+            spans.push(Span::from(value).dark_gray());
         }
 
         frame.render_widget(Clear, area);

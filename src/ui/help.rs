@@ -1,12 +1,12 @@
 use ratatui::{
+    Frame,
     layout::{Alignment, Rect},
     style::Stylize,
     text::{Line, Text},
     widgets::{Block, BorderType, Clear, Padding, Paragraph},
-    Frame,
 };
 
-use super::{centered, keymap::keymap_list, Component};
+use super::{Component, centered, keymap::keymap_list};
 
 pub struct Help;
 
