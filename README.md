@@ -1,5 +1,7 @@
 # HITMAN
 
+[![vibe code free](https://img.shields.io/badge/vibe_code-free-brightgreen.svg?logo=probot&logoColor=white&style=flat)](#)
+
 A command line tool for hitting API endpoints.
 
 ## Basic usage
