@@ -22,7 +22,11 @@ use crate::{
 #[derive(Debug, PartialEq, Eq)]
 pub enum Substitution<T> {
     Complete(T),
-    ValueMissing { key: String, multiple: bool },
+    ValueMissing {
+        key: String,
+        multiple: bool,
+        fallback: Option<String>,
+    },
 }
 
 pub use Substitution::{Complete, ValueMissing};
@@ -30,6 +34,7 @@ pub use Substitution::{Complete, ValueMissing};
 thread_local! {
     static MISSING: Cell<Option<String>> = const { Cell::new(None) };
     static MULTIPLE: Cell<bool> = const { Cell::new(false) };
+    static FALLBACK: Cell<Option<String>> = const { Cell::new(None) };
 }
 
 #[derive(Debug)]
@@ -57,8 +62,16 @@ pub fn prepare_request(
     let input = read_to_string(resolved.http_file())?;
     let buf = match substitute(&input, vars)? {
         Complete(buf) => buf,
-        ValueMissing { key, multiple } => {
-            return Ok(ValueMissing { key, multiple })
+        ValueMissing {
+            key,
+            multiple,
+            fallback,
+        } => {
+            return Ok(ValueMissing {
+                key,
+                multiple,
+                fallback,
+            })
         }
     };
 
@@ -94,6 +107,7 @@ pub fn prepare_request(
                         return Ok(ValueMissing {
                             key: key.name,
                             multiple: false,
+                            fallback: None,
                         });
                     };
 
@@ -144,6 +158,7 @@ pub fn substitute(
 ) -> anyhow::Result<Substitution<String>> {
     MISSING.set(None);
     MULTIPLE.set(false);
+    FALLBACK.set(None);
     let ctx = TrackingContext { vars: vars.clone() };
 
     let mut env = Environment::new();
@@ -157,6 +172,12 @@ pub fn substitute(
         MULTIPLE.set(false);
         v
     });
+    env.add_filter("fallback", |v: Value, fallback: String| {
+        if v.is_undefined() {
+            FALLBACK.set(Some(fallback));
+        }
+        v
+    });
 
     let ctx_val = Value::from_object(ctx);
 
@@ -167,6 +188,7 @@ pub fn substitute(
                 return Ok(ValueMissing {
                     key,
                     multiple: MULTIPLE.take(),
+                    fallback: FALLBACK.take(),
                 });
             }
             Err(e.into())
@@ -258,6 +280,7 @@ mod tests {
             ValueMissing {
                 key: "href".to_string(),
                 multiple: false,
+                fallback: None,
             }
         );
     }
@@ -345,6 +368,7 @@ mod tests {
             ValueMissing {
                 key: "missing".to_string(),
                 multiple: false,
+                fallback: None,
             }
         );
     }
@@ -359,8 +383,34 @@ mod tests {
             ValueMissing {
                 key: "missing".to_string(),
                 multiple: true,
+                fallback: None,
             }
         );
+    }
+
+    #[test]
+    fn returns_fallback_when_fallback_filter_used() {
+        let vars = create_vars();
+        let res =
+            substitute("{{ href | fallback('fallback.com') }}", &vars).unwrap();
+
+        assert_eq!(
+            res,
+            ValueMissing {
+                key: "href".to_string(),
+                multiple: false,
+                fallback: Some("fallback.com".to_string()),
+            }
+        );
+    }
+
+    #[test]
+    fn fallback_filter_is_noop_when_value_present() {
+        let vars = create_vars();
+        let res =
+            substitute("{{ url | fallback('fallback.com') }}", &vars).unwrap();
+
+        assert_eq!(res, Complete("example.com".to_string()));
     }
 
     #[test]

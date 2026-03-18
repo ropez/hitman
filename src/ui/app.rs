@@ -133,7 +133,7 @@ pub enum Intent {
 }
 
 pub enum AskForValueParams {
-    Prompt,
+    Prompt { fallback: Option<String> },
     Select { values: Vec<Value>, multiple: bool },
 }
 
@@ -338,7 +338,11 @@ impl App {
                 resolved,
                 prepared_request,
             }),
-            ValueMissing { key, multiple } => {
+            ValueMissing {
+                key,
+                multiple,
+                fallback,
+            } => {
                 let scope = load_env(&self.target, &resolved, &[])?;
 
                 match scope.lookup(&key)? {
@@ -362,7 +366,7 @@ impl App {
                             key,
                             file_path,
                             pending_vars: vars,
-                            params: AskForValueParams::Prompt,
+                            params: AskForValueParams::Prompt { fallback },
                         })
                     }
                 }
@@ -454,13 +458,17 @@ fn create_prompt_component(
             .with_multiple(multiple),
         ),
 
-        AskForValueParams::Prompt => {
+        AskForValueParams::Prompt { fallback } => {
             if key.ends_with("_date") || key.ends_with("Date") {
-                Box::new(DatePicker::new(format!("Select {{{{{key}}}}}")))
+                Box::new(
+                    DatePicker::new(format!("Select {{{{{key}}}}}"))
+                        .with_fallback(fallback),
+                )
             } else {
-                Box::new(SimplePrompt::new(format!(
-                    "Enter value for {{{{{key}}}}}"
-                )))
+                Box::new(
+                    SimplePrompt::new(format!("Enter value for {{{{{key}}}}}"))
+                        .with_fallback(fallback),
+                )
             }
         }
     }

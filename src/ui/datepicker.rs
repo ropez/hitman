@@ -26,6 +26,15 @@ impl DatePicker {
             selected: Local::now().date_naive(),
         }
     }
+
+    pub fn with_fallback(self, fallback: Option<String>) -> Self {
+        Self {
+            selected: fallback
+                .and_then(|f| f.parse::<NaiveDate>().ok())
+                .unwrap_or(self.selected),
+            ..self
+        }
+    }
 }
 
 impl Component for DatePicker {
