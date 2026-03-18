@@ -340,8 +340,8 @@ impl App {
             }),
             ValueMissing {
                 key,
-                multiple,
                 fallback,
+                multiple,
             } => {
                 let scope = load_env(&self.target, &resolved, &[])?;
 

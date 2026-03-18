@@ -24,8 +24,8 @@ pub enum Substitution<T> {
     Complete(T),
     ValueMissing {
         key: String,
-        multiple: bool,
         fallback: Option<String>,
+        multiple: bool,
     },
 }
 
@@ -64,13 +64,13 @@ pub fn prepare_request(
         Complete(buf) => buf,
         ValueMissing {
             key,
-            multiple,
             fallback,
+            multiple,
         } => {
             return Ok(ValueMissing {
                 key,
-                multiple,
                 fallback,
+                multiple,
             })
         }
     };
@@ -106,8 +106,8 @@ pub fn prepare_request(
                     let Some(value) = vars.get(&key.name) else {
                         return Ok(ValueMissing {
                             key: key.name,
-                            multiple: false,
                             fallback: None,
+                            multiple: false,
                         });
                     };
 
@@ -237,7 +237,7 @@ mod tests {
     #[test]
     fn substitutes_single_variable() {
         let vars = create_vars();
-        let res = substitute("foo {{ url }}\nbar\n", &vars).unwrap();
+        let res = substitute("foo {{url}}\nbar\n", &vars).unwrap();
 
         assert_eq!(res, Complete("foo example.com\nbar\n".to_string()));
     }
@@ -245,7 +245,7 @@ mod tests {
     #[test]
     fn substitutes_integer() {
         let vars = create_vars();
-        let res = substitute("foo={{ integer }}", &vars).unwrap();
+        let res = substitute("foo={{integer}}", &vars).unwrap();
 
         assert_eq!(res, Complete("foo=42".to_string()));
     }
@@ -254,20 +254,27 @@ mod tests {
     fn substitutes_placeholder_with_default_value() {
         let vars = create_vars();
         let res =
-            substitute("foo: {{ url | default('fallback.com') }}\n", &vars)
+            substitute("foo: {{ url | fallback('fallback.com') }}\n", &vars)
                 .unwrap();
 
         assert_eq!(res, Complete("foo: example.com\n".to_string()));
     }
 
     #[test]
-    fn uses_default_when_value_missing() {
+    fn substitutes_default_value() {
         let vars = create_vars();
         let res =
-            substitute("foo: {{ href | default('fallback.com') }}\n", &vars)
+            substitute("foo: {{ href | fallback('fallback.com') }}\n", &vars)
                 .unwrap();
 
-        assert_eq!(res, Complete("foo: fallback.com\n".to_string()));
+        assert_eq!(
+            res,
+            ValueMissing {
+                key: "href".to_string(),
+                fallback: Some("fallback.com".to_string()),
+                multiple: false,
+            }
+        );
     }
 
     #[test]
@@ -279,8 +286,8 @@ mod tests {
             res,
             ValueMissing {
                 key: "href".to_string(),
-                multiple: false,
                 fallback: None,
+                multiple: false,
             }
         );
     }
@@ -288,7 +295,7 @@ mod tests {
     #[test]
     fn substitutes_single_variable_with_spaces() {
         let vars = create_vars();
-        let res = substitute("foo {{url}}\nbar\n", &vars).unwrap();
+        let res = substitute("foo {{ url  }}\nbar\n", &vars).unwrap();
 
         assert_eq!(res, Complete("foo example.com\nbar\n".to_string()));
     }
@@ -296,8 +303,7 @@ mod tests {
     #[test]
     fn substitutes_one_variable_per_line() {
         let vars = create_vars();
-        let res =
-            substitute("foo {{ url }}\nbar {{ token }}\n", &vars).unwrap();
+        let res = substitute("foo {{url}}\nbar {{token}}\n", &vars).unwrap();
 
         assert_eq!(res, Complete("foo example.com\nbar abc123\n".to_string()));
     }
@@ -305,8 +311,7 @@ mod tests {
     #[test]
     fn substitutes_variable_on_the_same_line() {
         let vars = create_vars();
-        let res =
-            substitute("foo {{ url }}, bar {{ token }}\n", &vars).unwrap();
+        let res = substitute("foo {{url}}, bar {{token}}\n", &vars).unwrap();
 
         assert_eq!(res, Complete("foo example.com, bar abc123\n".to_string()));
     }
