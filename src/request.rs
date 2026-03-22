@@ -133,15 +133,22 @@ pub async fn make_request(resolved: &Resolved, scope: &Scope) -> Result<()> {
 
     // Subscription for graphql is a stream
     if let Some(content_type) = response.headers().get(CONTENT_TYPE) {
-        if content_type.to_str()?.contains("text/event-stream") {
-            return parse_stream_output(response).await;
+        let mime = mime::Mime::from_str(content_type.to_str()?)?;
+        match (mime.type_(), mime.subtype()) {
+            (mime::TEXT, mime::EVENT_STREAM) => {
+                return parse_stream_output(response).await;
+            }
+            (_, subtype) if subtype.as_str().contains("json") => {
+                let json = response.json::<Value>().await?;
+                println!("{}", serde_json::to_string_pretty(&json)?);
+                let vars = extract_variables(&json, scope)?;
+                update_data(&resolved.root_dir, &vars)?;
+            }
+            _ => {
+                let text = response.text().await?;
+                println!("{text}");
+            }
         }
-    }
-
-    if let Ok(json) = response.json::<Value>().await {
-        println!("{}", serde_json::to_string_pretty(&json)?);
-        let vars = extract_variables(&json, scope)?;
-        update_data(&resolved.root_dir, &vars)?;
     }
 
     warn!("# Request completed in {:.2?}", elapsed);
