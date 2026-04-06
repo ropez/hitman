@@ -26,7 +26,7 @@ pub async fn monitor(
 
     let interaction = get_interaction();
     let req =
-        prepare_request_interactive(resolved, scope, interaction.as_ref())?;
+        prepare_request_interactive(resolved, scope, interaction)?;
 
     loop {
         let res = do_request(&client, &req).await;

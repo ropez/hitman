@@ -1,6 +1,7 @@
 use std::cell::Cell;
-use std::sync::{Arc, mpsc};
-use std::thread;
+use std::collections::HashMap;
+use std::fmt;
+use std::sync::Arc;
 
 use anyhow::Context;
 use httparse::Status;
@@ -15,6 +16,7 @@ use std::{
     str::{self, FromStr},
 };
 
+use crate::request::find_args;
 use crate::{
     request::{HitmanBody, HitmanRequest},
     resolve::{Resolved, ResolvedAs},
@@ -30,70 +32,58 @@ pub enum SubstituteValue {
     Multiple(Vec<toml::Value>),
 }
 
-#[derive(Debug)]
-pub enum SubstituteEvent {
-    LookupReplacement {
-        key: String,
-        reply_tx: mpsc::SyncSender<SubstituteValue>,
-    },
-    SelectSingle {
-        key: String,
-        values: Vec<toml::Value>,
-        reply_tx: mpsc::SyncSender<Value>,
-    },
-    SelectMultiple {
-        key: String,
-        values: Vec<toml::Value>,
-        reply_tx: mpsc::SyncSender<Vec<Value>>,
-    },
+pub trait SubstituteProvider {
+    fn lookup_replacement(
+        &self,
+        key: &str,
+        fallback: Option<&str>,
+    ) -> SubstituteValue;
+    fn select_single(&self, key: &str, values: &[toml::Value]) -> Value;
+    fn select_multiple(&self, key: &str, values: &[toml::Value]) -> Vec<Value>;
+}
+
+impl fmt::Debug for dyn SubstituteProvider + Send + Sync {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{{SubstituteProvider}}")
+    }
 }
 
 #[derive(Debug)]
 struct TrackingContext {
-    tx: mpsc::SyncSender<SubstituteEvent>,
+    provider: Arc<dyn SubstituteProvider + Send + Sync + 'static>,
+}
+
+impl TrackingContext {
+    fn new(
+        provider: Arc<dyn SubstituteProvider + Send + Sync + 'static>,
+    ) -> Self {
+        Self { provider }
+    }
 }
 
 impl Object for TrackingContext {
     fn get_value(self: &Arc<Self>, key: &Value) -> Option<Value> {
         let key_str = key.as_str()?;
-        let (reply_tx, reply_rx) = mpsc::sync_channel(1);
-        self.tx
-            .send(SubstituteEvent::LookupReplacement {
-                key: key_str.to_string(),
-                reply_tx,
-            })
-            .ok()?;
-
-        let val = reply_rx.recv().ok()?;
+        let val = self.provider.lookup_replacement(key_str, None);
 
         Some(match val {
             SubstituteValue::Single(value) => value,
-            SubstituteValue::Multiple(values) => Value::from_object(
-                SingleSelect::new(self.tx.clone(), key_str.to_string(), values),
-            ),
+            SubstituteValue::Multiple(values) => Value::from_object({
+                SingleSelect {
+                    provider: self.provider.clone(),
+                    key: key_str.to_string(),
+                    values,
+                }
+            }),
         })
     }
 }
 
 #[derive(Debug, Clone)]
 pub struct SingleSelect {
-    tx: mpsc::SyncSender<SubstituteEvent>,
+    provider: Arc<dyn SubstituteProvider + Send + Sync + 'static>,
     key: String,
     values: Vec<toml::Value>,
-}
-
-impl SingleSelect {
-    fn new(
-        tx: mpsc::SyncSender<SubstituteEvent>,
-        key: String,
-        values: Vec<toml::Value>,
-    ) -> Self {
-        Self { tx, key, values }
-    }
-
-    fn to_multiple(&self) -> MultiSelect {
-        MultiSelect::new(self.tx.clone(), self.key.clone(), self.values.clone())
-    }
 }
 
 impl Object for SingleSelect {
@@ -105,15 +95,7 @@ impl Object for SingleSelect {
         self: &Arc<Self>,
         f: &mut std::fmt::Formatter<'_>,
     ) -> std::fmt::Result {
-        let (reply_tx, reply_rx) = mpsc::sync_channel(1);
-        self.tx
-            .send(SubstituteEvent::SelectSingle {
-                key: self.key.clone(),
-                values: self.values.clone(),
-                reply_tx,
-            })
-            .unwrap();
-        let value = reply_rx.recv().unwrap();
+        let value = self.provider.select_single(&self.key, &self.values);
 
         write!(f, "{value}")
     }
@@ -121,19 +103,9 @@ impl Object for SingleSelect {
 
 #[derive(Debug, Clone)]
 pub struct MultiSelect {
-    tx: mpsc::SyncSender<SubstituteEvent>,
+    provider: Arc<dyn SubstituteProvider + Send + Sync + 'static>,
     key: String,
     values: Vec<toml::Value>,
-}
-
-impl MultiSelect {
-    fn new(
-        tx: mpsc::SyncSender<SubstituteEvent>,
-        key: String,
-        values: Vec<toml::Value>,
-    ) -> Self {
-        Self { tx, key, values }
-    }
 }
 
 impl Object for MultiSelect {
@@ -142,28 +114,18 @@ impl Object for MultiSelect {
     }
 
     fn enumerate(self: &Arc<Self>) -> Enumerator {
-        let (reply_tx, reply_rx) = mpsc::sync_channel(1);
-        self.tx
-            .send(SubstituteEvent::SelectMultiple {
-                key: self.key.clone(),
-                values: self.values.clone(),
-                reply_tx,
-            })
-            .unwrap();
-        let values = reply_rx.recv().unwrap();
+        let values = self.provider.select_multiple(&self.key, &self.values);
 
-        Enumerator::Values(
-            values.iter().map(|v| Value::from(v.clone())).collect(),
-        )
+        Enumerator::Values(values.clone())
     }
 }
 
 pub fn prepare_request(
     resolved: &Resolved,
-    on_event: impl FnMut(SubstituteEvent) -> anyhow::Result<()>,
+    handler: Arc<dyn SubstituteProvider + Send + Sync + 'static>,
 ) -> anyhow::Result<HitmanRequest> {
     let input = read_to_string(resolved.http_file())?;
-    let buf = substitute(input, on_event)?;
+    let buf = substitute(input, handler.clone())?;
 
     let mut headers_buf = [httparse::EMPTY_HEADER; 64];
     let mut req = httparse::Request::new(&mut headers_buf);
@@ -180,38 +142,39 @@ pub fn prepare_request(
 
     let body = match &resolved.resolved_as {
         ResolvedAs::GraphQL { graphql_path, .. } => {
-            todo!()
-            // let body = read_to_string(graphql_path)?;
-            // let args = find_args(graphql_path)?;
-            //
-            // if args.is_empty() {
-            //     Some(HitmanBody::GraphQL {
-            //         body,
-            //         variables: None,
-            //     })
-            // } else {
-            //     let mut map: HashMap<String, serde_json::Value> =
-            //         HashMap::new();
-            //
-            //     for key in args {
-            //         let Some(value) = vars.get(&key.name) else {
-            //             return Ok(ValueMissing {
-            //                 key: key.name,
-            //                 fallback: None,
-            //                 multiple: false,
-            //             });
-            //         };
-            //
-            //         map.insert(key.name, serde_json::to_value(value)?);
-            //     }
-            //
-            //     let variables = serde_json::to_value(map)?;
-            //
-            //     Some(HitmanBody::GraphQL {
-            //         body,
-            //         variables: Some(variables),
-            //     })
-            // }
+            let body = read_to_string(graphql_path)?;
+            let args = find_args(graphql_path)?;
+
+            if args.is_empty() {
+                Some(HitmanBody::GraphQL {
+                    body,
+                    variables: None,
+                })
+            } else {
+                let mut map: HashMap<String, serde_json::Value> =
+                    HashMap::new();
+
+                for key in args {
+                    let value =
+                        match handler.lookup_replacement(&key.name, None) {
+                            SubstituteValue::Single(value) => {
+                                serde_json::to_value(value)
+                            }
+                            SubstituteValue::Multiple(values) => {
+                                serde_json::to_value(values)
+                            }
+                        }?;
+
+                    map.insert(key.name, value);
+                }
+
+                let variables = serde_json::to_value(map)?;
+
+                Some(HitmanBody::GraphQL {
+                    body,
+                    variables: Some(variables),
+                })
+            }
         }
         ResolvedAs::Simple { .. } => match parse_result {
             Status::Complete(offset) => Some(HitmanBody::Plain {
@@ -245,19 +208,23 @@ pub fn prepare_request(
 
 pub fn substitute(
     input: String,
-    mut on_event: impl FnMut(SubstituteEvent) -> anyhow::Result<()>,
+    handler: Arc<dyn SubstituteProvider + Send + Sync + 'static>,
 ) -> anyhow::Result<String> {
-    let (tx, rx) = mpsc::sync_channel(1);
-
     FALLBACK.set(None);
-    let ctx = TrackingContext { tx };
+    let ctx = TrackingContext::new(handler);
 
     let mut env = Environment::new();
     env.set_undefined_behavior(UndefinedBehavior::Strict);
     env.set_keep_trailing_newline(true);
     env.add_filter("select_multiple", |v: Value| {
         if let Some(obj) = v.downcast_object_ref::<SingleSelect>() {
-            Value::from_object(obj.to_multiple())
+            Value::from_object({
+                MultiSelect {
+                    provider: obj.provider.clone(),
+                    key: obj.key.clone(),
+                    values: obj.values.clone(),
+                }
+            })
         } else if v.downcast_object_ref::<MultiSelect>().is_some() {
             v
         } else {
@@ -276,17 +243,8 @@ pub fn substitute(
 
     let ctx_val = Value::from_object(ctx);
 
-    let handle = thread::spawn(move || env.render_str(&input, ctx_val));
-
-    while !handle.is_finished() {
-        if let Ok(ev) = rx.recv() {
-            on_event(ev)?;
-        } else {
-            break;
-        }
-    }
-
-    Ok(handle.join().unwrap()?)
+    let res = env.render_str(&input, ctx_val)?;
+    Ok(res)
 }
 
 #[cfg(test)]

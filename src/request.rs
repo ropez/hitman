@@ -116,7 +116,7 @@ pub async fn make_request(resolved: &Resolved, scope: &Scope) -> Result<()> {
     let interaction = get_interaction();
 
     let req =
-        prepare_request_interactive(resolved, scope, interaction.as_ref())?;
+        prepare_request_interactive(resolved, scope, interaction)?;
 
     print_request(&req);
 

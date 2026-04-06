@@ -2,14 +2,19 @@ use anyhow::{Result, bail};
 use fuzzy_matcher::skim::SkimMatcherV2;
 use inquire::{DateSelect, MultiSelect, Select, Text, list_option::ListOption};
 use minijinja::Value as JinjaValue;
-use std::{collections::HashMap, env, string::ToString};
+use std::{
+    collections::HashMap,
+    env,
+    string::ToString,
+    sync::{Arc, RwLock},
+};
 use toml::Value;
 
 use crate::{
     request::HitmanRequest,
     resolve::Resolved,
     scope::{Replacement, Scope},
-    substitute::{SubstituteEvent, SubstituteValue, prepare_request},
+    substitute::{SubstituteProvider, SubstituteValue, prepare_request},
 };
 
 fn set_boolean(name: &str, value: bool) {
@@ -34,11 +39,11 @@ pub fn fuzzy_match(filter: &str, value: &str) -> Option<i64> {
     fuzzy_score.map(|(score, _)| score)
 }
 
-pub fn get_interaction() -> Box<dyn UserInteraction> {
+pub fn get_interaction() -> Arc<dyn UserInteraction + Send + Sync + 'static> {
     if is_interactive_mode() {
-        Box::new(CliUserInteraction)
+        Arc::new(CliUserInteraction)
     } else {
-        Box::new(NoUserInteraction)
+        Arc::new(NoUserInteraction)
     }
 }
 
@@ -55,61 +60,79 @@ pub trait UserInteraction {
 pub fn prepare_request_interactive<I>(
     resolved: &Resolved,
     scope: &Scope,
-    interaction: &I,
+    interaction: Arc<I>,
 ) -> Result<HitmanRequest>
 where
-    I: UserInteraction + ?Sized,
+    I: UserInteraction + Send + Sync + ?Sized + 'static,
 {
-    let mut vars: HashMap<String, SubstituteValue> = HashMap::new();
+    let handler = Arc::new(Handler::new(interaction, scope.clone()));
 
-    let mut lookup = move |key: &String| -> Result<SubstituteValue> {
-        if let Some(v) = vars.get(key) {
-            Ok(v.clone())
-        } else {
-            let val = match scope.lookup(key)? {
-                Replacement::Value(v) => {
-                    SubstituteValue::Single(JinjaValue::from(v))
-                }
-                Replacement::ValueNotFound { key } => SubstituteValue::Single(
-                    JinjaValue::from(interaction.prompt(&key, None)?),
-                ),
-                Replacement::MultipleValuesFound { key: _, values } => {
-                    SubstituteValue::Multiple(values)
-                }
-            };
-            vars.insert(key.clone(), val.clone());
-            Ok(val)
+    let res = prepare_request(resolved, handler)?;
+    Ok(res)
+}
+
+pub struct Handler<I>
+where
+    I: UserInteraction + Send + Sync + ?Sized + 'static,
+{
+    interaction: Arc<I>,
+    scope: Scope,
+    vars: RwLock<HashMap<String, SubstituteValue>>,
+}
+
+impl<I> Handler<I>
+where
+    I: UserInteraction + Send + Sync + ?Sized + 'static,
+{
+    pub fn new(interaction: Arc<I>, scope: Scope) -> Self {
+        Self {
+            interaction,
+            scope,
+            vars: Default::default(),
         }
-    };
+    }
+}
 
-    let on_event = move |ev: SubstituteEvent| -> Result<()> {
-        match ev {
-            SubstituteEvent::LookupReplacement { key, reply_tx } => {
-                let val = lookup(&key)?;
-                reply_tx.send(val)?;
+impl<I> SubstituteProvider for Handler<I>
+where
+    I: UserInteraction + Send + Sync + ?Sized + 'static,
+{
+    fn lookup_replacement(&self, key: &str, fallback: Option<&str>) -> SubstituteValue {
+        {
+            let vars = self.vars.read().unwrap();
+            if let Some(v) = vars.get(key) {
+                return v.clone();
             }
-            SubstituteEvent::SelectMultiple {
-                key,
-                values,
-                reply_tx,
-            } => {
-                let val = interaction.select_multiple(&key, &values)?;
-                reply_tx.send(val)?
+        }
+
+        let val = match self.scope.lookup(key).unwrap() {
+            Replacement::Value(v) => {
+                SubstituteValue::Single(JinjaValue::from(v))
             }
-            SubstituteEvent::SelectSingle {
-                key,
-                values,
-                reply_tx,
-            } => {
-                let val = interaction.select(&key, &values)?;
-                reply_tx.send(val)?
+            Replacement::ValueNotFound { key } => SubstituteValue::Single(
+                JinjaValue::from(self.interaction.prompt(&key, fallback).unwrap()),
+            ),
+            Replacement::MultipleValuesFound { key: _, values } => {
+                SubstituteValue::Multiple(values)
             }
         };
-        Ok(())
-    };
 
-    let res = prepare_request(resolved, on_event)?;
-    Ok(res)
+        let mut vars_mut = self.vars.write().unwrap();
+        vars_mut.insert(key.to_string(), val.clone());
+        val
+    }
+
+    fn select_single(&self, key: &str, values: &[toml::Value]) -> JinjaValue {
+        self.interaction.select(key, values).unwrap()
+    }
+
+    fn select_multiple(
+        &self,
+        key: &str,
+        values: &[toml::Value],
+    ) -> Vec<JinjaValue> {
+        self.interaction.select_multiple(key, values).unwrap()
+    }
 }
 
 pub struct NoUserInteraction;

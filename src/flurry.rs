@@ -32,7 +32,7 @@ pub async fn flurry_attack(
 
     let interaction = get_interaction();
     let req =
-        prepare_request_interactive(resolved, scope, interaction.as_ref())?;
+        prepare_request_interactive(resolved, scope, interaction)?;
 
     let t = std::time::Instant::now();
     let mut spinner = Spinner::new_with_stream(
