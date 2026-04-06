@@ -1,79 +1,169 @@
 use std::cell::Cell;
-use std::sync::Arc;
+use std::sync::{Arc, mpsc};
+use std::thread;
 
 use anyhow::Context;
 use httparse::Status;
-use minijinja::{value::Object, Environment, UndefinedBehavior, Value};
+use minijinja::value::{Enumerator, ObjectRepr};
+use minijinja::{Environment, UndefinedBehavior, Value, value::Object};
 use reqwest::{
-    header::{HeaderMap, HeaderName, HeaderValue},
     Method, Url,
+    header::{HeaderMap, HeaderName, HeaderValue},
 };
 use std::{
-    collections::HashMap,
     fs::read_to_string,
     str::{self, FromStr},
 };
 
 use crate::{
-    request::{find_args, HitmanBody, HitmanRequest},
+    request::{HitmanBody, HitmanRequest},
     resolve::{Resolved, ResolvedAs},
 };
 
-#[derive(Debug, PartialEq, Eq)]
-pub enum Substitution<T> {
-    Complete(T),
-    ValueMissing {
-        key: String,
-        fallback: Option<String>,
-        multiple: bool,
-    },
+thread_local! {
+    static FALLBACK: Cell<Option<String>> = const { Cell::new(None) };
 }
 
-pub use Substitution::{Complete, ValueMissing};
+#[derive(Debug, Clone)]
+pub enum SubstituteValue {
+    Single(Value),
+    Multiple(Vec<toml::Value>),
+}
 
-thread_local! {
-    static MISSING: Cell<Option<String>> = const { Cell::new(None) };
-    static MULTIPLE: Cell<bool> = const { Cell::new(false) };
-    static FALLBACK: Cell<Option<String>> = const { Cell::new(None) };
+#[derive(Debug)]
+pub enum SubstituteEvent {
+    LookupReplacement {
+        key: String,
+        reply_tx: mpsc::SyncSender<SubstituteValue>,
+    },
+    SelectSingle {
+        key: String,
+        values: Vec<toml::Value>,
+        reply_tx: mpsc::SyncSender<Value>,
+    },
+    SelectMultiple {
+        key: String,
+        values: Vec<toml::Value>,
+        reply_tx: mpsc::SyncSender<Vec<Value>>,
+    },
 }
 
 #[derive(Debug)]
 struct TrackingContext {
-    vars: HashMap<String, Value>,
+    tx: mpsc::SyncSender<SubstituteEvent>,
 }
 
 impl Object for TrackingContext {
     fn get_value(self: &Arc<Self>, key: &Value) -> Option<Value> {
         let key_str = key.as_str()?;
-        match self.vars.get(key_str) {
-            Some(v) => Some(v.clone()),
-            None => {
-                MISSING.set(Some(key_str.to_string()));
-                Some(Value::UNDEFINED)
-            }
-        }
+        let (reply_tx, reply_rx) = mpsc::sync_channel(1);
+        self.tx
+            .send(SubstituteEvent::LookupReplacement {
+                key: key_str.to_string(),
+                reply_tx,
+            })
+            .ok()?;
+
+        let val = reply_rx.recv().ok()?;
+
+        Some(match val {
+            SubstituteValue::Single(value) => value,
+            SubstituteValue::Multiple(values) => Value::from_object(
+                SingleSelect::new(self.tx.clone(), key_str.to_string(), values),
+            ),
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct SingleSelect {
+    tx: mpsc::SyncSender<SubstituteEvent>,
+    key: String,
+    values: Vec<toml::Value>,
+}
+
+impl SingleSelect {
+    fn new(
+        tx: mpsc::SyncSender<SubstituteEvent>,
+        key: String,
+        values: Vec<toml::Value>,
+    ) -> Self {
+        Self { tx, key, values }
+    }
+
+    fn to_multiple(&self) -> MultiSelect {
+        MultiSelect::new(self.tx.clone(), self.key.clone(), self.values.clone())
+    }
+}
+
+impl Object for SingleSelect {
+    fn repr(self: &Arc<Self>) -> ObjectRepr {
+        ObjectRepr::Plain
+    }
+
+    fn render(
+        self: &Arc<Self>,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
+        let (reply_tx, reply_rx) = mpsc::sync_channel(1);
+        self.tx
+            .send(SubstituteEvent::SelectSingle {
+                key: self.key.clone(),
+                values: self.values.clone(),
+                reply_tx,
+            })
+            .unwrap();
+        let value = reply_rx.recv().unwrap();
+
+        write!(f, "{value}")
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct MultiSelect {
+    tx: mpsc::SyncSender<SubstituteEvent>,
+    key: String,
+    values: Vec<toml::Value>,
+}
+
+impl MultiSelect {
+    fn new(
+        tx: mpsc::SyncSender<SubstituteEvent>,
+        key: String,
+        values: Vec<toml::Value>,
+    ) -> Self {
+        Self { tx, key, values }
+    }
+}
+
+impl Object for MultiSelect {
+    fn repr(self: &Arc<Self>) -> ObjectRepr {
+        ObjectRepr::Iterable
+    }
+
+    fn enumerate(self: &Arc<Self>) -> Enumerator {
+        let (reply_tx, reply_rx) = mpsc::sync_channel(1);
+        self.tx
+            .send(SubstituteEvent::SelectMultiple {
+                key: self.key.clone(),
+                values: self.values.clone(),
+                reply_tx,
+            })
+            .unwrap();
+        let values = reply_rx.recv().unwrap();
+
+        Enumerator::Values(
+            values.iter().map(|v| Value::from(v.clone())).collect(),
+        )
     }
 }
 
 pub fn prepare_request(
     resolved: &Resolved,
-    vars: &HashMap<String, Value>,
-) -> anyhow::Result<Substitution<HitmanRequest>> {
+    on_event: impl FnMut(SubstituteEvent) -> anyhow::Result<()>,
+) -> anyhow::Result<HitmanRequest> {
     let input = read_to_string(resolved.http_file())?;
-    let buf = match substitute(&input, vars)? {
-        Complete(buf) => buf,
-        ValueMissing {
-            key,
-            fallback,
-            multiple,
-        } => {
-            return Ok(ValueMissing {
-                key,
-                fallback,
-                multiple,
-            })
-        }
-    };
+    let buf = substitute(input, on_event)?;
 
     let mut headers_buf = [httparse::EMPTY_HEADER; 64];
     let mut req = httparse::Request::new(&mut headers_buf);
@@ -90,37 +180,38 @@ pub fn prepare_request(
 
     let body = match &resolved.resolved_as {
         ResolvedAs::GraphQL { graphql_path, .. } => {
-            let body = read_to_string(graphql_path)?;
-            let args = find_args(graphql_path)?;
-
-            if args.is_empty() {
-                Some(HitmanBody::GraphQL {
-                    body,
-                    variables: None,
-                })
-            } else {
-                let mut map: HashMap<String, serde_json::Value> =
-                    HashMap::new();
-
-                for key in args {
-                    let Some(value) = vars.get(&key.name) else {
-                        return Ok(ValueMissing {
-                            key: key.name,
-                            fallback: None,
-                            multiple: false,
-                        });
-                    };
-
-                    map.insert(key.name, serde_json::to_value(value)?);
-                }
-
-                let variables = serde_json::to_value(map)?;
-
-                Some(HitmanBody::GraphQL {
-                    body,
-                    variables: Some(variables),
-                })
-            }
+            todo!()
+            // let body = read_to_string(graphql_path)?;
+            // let args = find_args(graphql_path)?;
+            //
+            // if args.is_empty() {
+            //     Some(HitmanBody::GraphQL {
+            //         body,
+            //         variables: None,
+            //     })
+            // } else {
+            //     let mut map: HashMap<String, serde_json::Value> =
+            //         HashMap::new();
+            //
+            //     for key in args {
+            //         let Some(value) = vars.get(&key.name) else {
+            //             return Ok(ValueMissing {
+            //                 key: key.name,
+            //                 fallback: None,
+            //                 multiple: false,
+            //             });
+            //         };
+            //
+            //         map.insert(key.name, serde_json::to_value(value)?);
+            //     }
+            //
+            //     let variables = serde_json::to_value(map)?;
+            //
+            //     Some(HitmanBody::GraphQL {
+            //         body,
+            //         variables: Some(variables),
+            //     })
+            // }
         }
         ResolvedAs::Simple { .. } => match parse_result {
             Status::Complete(offset) => Some(HitmanBody::Plain {
@@ -144,35 +235,39 @@ pub fn prepare_request(
         headers.insert(header_name, header_value);
     }
 
-    Ok(Complete(HitmanRequest {
+    Ok(HitmanRequest {
         headers,
         url,
         method,
         body,
-    }))
+    })
 }
 
 pub fn substitute(
-    input: &str,
-    vars: &HashMap<String, Value>,
-) -> anyhow::Result<Substitution<String>> {
-    MISSING.set(None);
-    MULTIPLE.set(false);
+    input: String,
+    mut on_event: impl FnMut(SubstituteEvent) -> anyhow::Result<()>,
+) -> anyhow::Result<String> {
+    let (tx, rx) = mpsc::sync_channel(1);
+
     FALLBACK.set(None);
-    let ctx = TrackingContext { vars: vars.clone() };
+    let ctx = TrackingContext { tx };
 
     let mut env = Environment::new();
     env.set_undefined_behavior(UndefinedBehavior::Strict);
     env.set_keep_trailing_newline(true);
     env.add_filter("select_multiple", |v: Value| {
-        MULTIPLE.set(true);
-        v
+        if let Some(obj) = v.downcast_object_ref::<SingleSelect>() {
+            Value::from_object(obj.to_multiple())
+        } else if v.downcast_object_ref::<MultiSelect>().is_some() {
+            v
+        } else {
+            eprintln!("WARNING: Not multiple choice");
+            v
+        }
     });
-    env.add_filter("select_one", |v: Value| {
-        MULTIPLE.set(false);
-        v
-    });
-    env.add_filter("fallback", |v: Value, fallback: String| {
+    env.add_filter("select_one", |v: Value| v);
+
+    env.add_filter("fallback", move |v: Value, fallback: String| {
         if v.is_undefined() {
             FALLBACK.set(Some(fallback));
         }
@@ -181,19 +276,17 @@ pub fn substitute(
 
     let ctx_val = Value::from_object(ctx);
 
-    match env.render_str(input, ctx_val) {
-        Ok(output) => Ok(Complete(output)),
-        Err(e) => {
-            if let Some(key) = MISSING.take() {
-                return Ok(ValueMissing {
-                    key,
-                    multiple: MULTIPLE.take(),
-                    fallback: FALLBACK.take(),
-                });
-            }
-            Err(e.into())
+    let handle = thread::spawn(move || env.render_str(&input, ctx_val));
+
+    while !handle.is_finished() {
+        if let Ok(ev) = rx.recv() {
+            on_event(ev)?;
+        } else {
+            break;
         }
     }
+
+    Ok(handle.join().unwrap()?)
 }
 
 #[cfg(test)]

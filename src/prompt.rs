@@ -1,6 +1,6 @@
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use fuzzy_matcher::skim::SkimMatcherV2;
-use inquire::{list_option::ListOption, DateSelect, MultiSelect, Select, Text};
+use inquire::{DateSelect, MultiSelect, Select, Text, list_option::ListOption};
 use minijinja::Value as JinjaValue;
 use std::{collections::HashMap, env, string::ToString};
 use toml::Value;
@@ -9,10 +9,7 @@ use crate::{
     request::HitmanRequest,
     resolve::Resolved,
     scope::{Replacement, Scope},
-    substitute::{
-        prepare_request,
-        Substitution::{Complete, ValueMissing},
-    },
+    substitute::{SubstituteEvent, SubstituteValue, prepare_request},
 };
 
 fn set_boolean(name: &str, value: bool) {
@@ -52,7 +49,7 @@ pub trait UserInteraction {
         &self,
         key: &str,
         values: &[Value],
-    ) -> Result<JinjaValue>;
+    ) -> Result<Vec<JinjaValue>>;
 }
 
 pub fn prepare_request_interactive<I>(
@@ -63,34 +60,56 @@ pub fn prepare_request_interactive<I>(
 where
     I: UserInteraction + ?Sized,
 {
-    let mut vars: HashMap<String, JinjaValue> = HashMap::new();
+    let mut vars: HashMap<String, SubstituteValue> = HashMap::new();
 
-    loop {
-        match prepare_request(resolved, &vars)? {
-            Complete(req) => return Ok(req),
-            ValueMissing {
-                key,
-                fallback,
-                multiple,
-            } => {
-                let value = match scope.lookup(&key)? {
-                    Replacement::Value(value) => JinjaValue::from(value),
-                    Replacement::ValueNotFound { key } => JinjaValue::from(
-                        interaction.prompt(&key, fallback.as_deref())?,
-                    ),
-                    Replacement::MultipleValuesFound { key, values } => {
-                        if multiple {
-                            interaction.select_multiple(&key, &values)?
-                        } else {
-                            interaction.select(&key, &values)?
-                        }
-                    }
-                };
-
-                vars.insert(key, value);
-            }
+    let mut lookup = move |key: &String| -> Result<SubstituteValue> {
+        if let Some(v) = vars.get(key) {
+            Ok(v.clone())
+        } else {
+            let val = match scope.lookup(key)? {
+                Replacement::Value(v) => {
+                    SubstituteValue::Single(JinjaValue::from(v))
+                }
+                Replacement::ValueNotFound { key } => SubstituteValue::Single(
+                    JinjaValue::from(interaction.prompt(&key, None)?),
+                ),
+                Replacement::MultipleValuesFound { key: _, values } => {
+                    SubstituteValue::Multiple(values)
+                }
+            };
+            vars.insert(key.clone(), val.clone());
+            Ok(val)
         }
-    }
+    };
+
+    let on_event = move |ev: SubstituteEvent| -> Result<()> {
+        match ev {
+            SubstituteEvent::LookupReplacement { key, reply_tx } => {
+                let val = lookup(&key)?;
+                reply_tx.send(val)?;
+            }
+            SubstituteEvent::SelectMultiple {
+                key,
+                values,
+                reply_tx,
+            } => {
+                let val = interaction.select_multiple(&key, &values)?;
+                reply_tx.send(val)?
+            }
+            SubstituteEvent::SelectSingle {
+                key,
+                values,
+                reply_tx,
+            } => {
+                let val = interaction.select(&key, &values)?;
+                reply_tx.send(val)?
+            }
+        };
+        Ok(())
+    };
+
+    let res = prepare_request(resolved, on_event)?;
+    Ok(res)
 }
 
 pub struct NoUserInteraction;
@@ -126,7 +145,7 @@ impl UserInteraction for NoUserInteraction {
         &self,
         key: &str,
         values: &[toml::Value],
-    ) -> Result<JinjaValue> {
+    ) -> Result<Vec<JinjaValue>> {
         let suggestions = self.get_suggestions(key, values);
         bail!("Replacement not selected: {key}\nSuggestions:\n{suggestions}");
     }
@@ -147,7 +166,7 @@ impl UserInteraction for CliUserInteraction {
         &self,
         key: &str,
         values: &[Value],
-    ) -> Result<JinjaValue> {
+    ) -> Result<Vec<JinjaValue>> {
         select_replacement_multiple(key, values)
     }
 }
@@ -197,7 +216,7 @@ fn select_replacement(key: &str, values: &[Value]) -> Result<JinjaValue> {
 fn select_replacement_multiple(
     key: &str,
     values: &[Value],
-) -> Result<JinjaValue> {
+) -> Result<Vec<JinjaValue>> {
     let list_options = values_to_list_options(values);
     let selected =
         MultiSelect::new(&format!("Select value for {key}"), list_options)
@@ -205,14 +224,14 @@ fn select_replacement_multiple(
             .with_page_size(15)
             .prompt()?;
 
-    let items: Vec<JinjaValue> = selected
+    let values = selected
         .iter()
         .map(|item| {
             list_option_to_string(key, values, item).map(JinjaValue::from)
         })
         .collect::<Result<Vec<_>>>()?;
 
-    Ok(JinjaValue::from(items))
+    Ok(values)
 }
 
 fn values_to_list_options(values: &[Value]) -> Vec<ListOption<String>> {
