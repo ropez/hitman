@@ -1,14 +1,14 @@
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use log::warn;
 use tokio::time::sleep;
 
 use std::time::Duration;
 
 use crate::{
-    prompt::{get_interaction, prepare_request_interactive},
+    prompt::get_interaction,
     request::{build_client, do_request},
     resolve::Resolved,
-    scope::Scope,
+    scope::Scope, substitute::prepare_request,
 };
 
 pub async fn monitor(
@@ -24,9 +24,8 @@ pub async fn monitor(
 
     warn!("# Repeating every {delay} seconds, until interrupted...");
 
-    let interaction = get_interaction();
-    let req =
-        prepare_request_interactive(resolved, scope, interaction)?;
+    let interaction = get_interaction(scope.clone());
+    let req = prepare_request(resolved, interaction)?;
 
     loop {
         let res = do_request(&client, &req).await;

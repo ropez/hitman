@@ -11,10 +11,8 @@ use std::{
 use toml::Value;
 
 use crate::{
-    request::HitmanRequest,
-    resolve::Resolved,
     scope::{Replacement, Scope},
-    substitute::{SubstituteProvider, SubstituteValue, prepare_request},
+    substitute::{SubstituteProvider, SubstituteValue},
 };
 
 fn set_boolean(name: &str, value: bool) {
@@ -39,64 +37,92 @@ pub fn fuzzy_match(filter: &str, value: &str) -> Option<i64> {
     fuzzy_score.map(|(score, _)| score)
 }
 
-pub fn get_interaction() -> Arc<dyn UserInteraction + Send + Sync + 'static> {
+pub fn get_interaction(
+    scope: Scope,
+) -> Arc<dyn SubstituteProvider + Send + Sync + 'static> {
     if is_interactive_mode() {
-        Arc::new(CliUserInteraction)
+        Arc::new(CliUserInteraction::new(scope))
     } else {
-        Arc::new(NoUserInteraction)
+        Arc::new(NoUserInteraction::new(scope))
     }
 }
 
-pub trait UserInteraction {
-    fn prompt(&self, key: &str, fallback: Option<&str>) -> Result<String>;
-    fn select(&self, key: &str, values: &[Value]) -> Result<JinjaValue>;
+pub struct NoUserInteraction {
+    scope: Scope,
+}
+
+impl NoUserInteraction {
+    pub fn new(scope: Scope) -> Self {
+        Self { scope }
+    }
+
+    fn get_suggestions(&self, key: &str, values: &[toml::Value]) -> String {
+        values
+            .iter()
+            .take(10)
+            .filter_map(|v| match (v.get("value"), v.get("name")) {
+                (Some(v), Some(n)) => Some(format!("{key}={v} => {n}")),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+}
+
+impl SubstituteProvider for NoUserInteraction {
+    fn lookup_value(&self, key: &str) -> Option<SubstituteValue> {
+        match self.scope.lookup(key).ok()? {
+            Replacement::ValueNotFound { .. } => None,
+            Replacement::Value(v) => {
+                Some(SubstituteValue::Single(JinjaValue::from(v)))
+            }
+            Replacement::MultipleValuesFound { key: _, values } => {
+                Some(SubstituteValue::Multiple(values))
+            }
+        }
+    }
+
+    fn prompt(&self, key: &str, fallback: Option<&str>) -> Result<JinjaValue> {
+        if let Some(val) = fallback.map(ToString::to_string) {
+            return Ok(JinjaValue::from(val));
+        }
+        bail!("Replacement not found: {key}");
+    }
+
+    fn select_single(
+        &self,
+        key: &str,
+        values: &[toml::Value],
+    ) -> Result<JinjaValue> {
+        let suggestions = self.get_suggestions(key, values);
+        bail!("Replacement not selected: {key}\nSuggestions:\n{suggestions}");
+    }
+
     fn select_multiple(
         &self,
         key: &str,
-        values: &[Value],
-    ) -> Result<Vec<JinjaValue>>;
+        values: &[toml::Value],
+    ) -> Result<Vec<JinjaValue>> {
+        let suggestions = self.get_suggestions(key, values);
+        bail!("Replacement not selected: {key}\nSuggestions:\n{suggestions}");
+    }
 }
 
-pub fn prepare_request_interactive<I>(
-    resolved: &Resolved,
-    scope: &Scope,
-    interaction: Arc<I>,
-) -> Result<HitmanRequest>
-where
-    I: UserInteraction + Send + Sync + ?Sized + 'static,
-{
-    let handler = Arc::new(Handler::new(interaction, scope.clone()));
-
-    let res = prepare_request(resolved, handler)?;
-    Ok(res)
-}
-
-pub struct Handler<I>
-where
-    I: UserInteraction + Send + Sync + ?Sized + 'static,
-{
-    interaction: Arc<I>,
+pub struct CliUserInteraction {
     scope: Scope,
     vars: RwLock<HashMap<String, SubstituteValue>>,
 }
 
-impl<I> Handler<I>
-where
-    I: UserInteraction + Send + Sync + ?Sized + 'static,
-{
-    pub fn new(interaction: Arc<I>, scope: Scope) -> Self {
+impl CliUserInteraction {
+    pub fn new(scope: Scope) -> Self {
         Self {
-            interaction,
             scope,
             vars: Default::default(),
         }
     }
 }
 
-impl<I> SubstituteProvider for Handler<I>
-where
-    I: UserInteraction + Send + Sync + ?Sized + 'static,
-{
+impl SubstituteProvider for CliUserInteraction {
     fn lookup_value(&self, key: &str) -> Option<SubstituteValue> {
         if let Some(v) = self.vars.read().unwrap().get(key) {
             return Some(v.clone());
@@ -114,7 +140,7 @@ where
     }
 
     fn prompt(&self, key: &str, fallback: Option<&str>) -> Result<JinjaValue> {
-        let val = self.interaction.prompt(key, fallback)?;
+        let val = prompt_user(key, fallback)?;
         let value = JinjaValue::from(val);
 
         let mut vars_mut = self.vars.write().unwrap();
@@ -128,72 +154,13 @@ where
         key: &str,
         values: &[toml::Value],
     ) -> Result<JinjaValue> {
-        self.interaction.select(key, values)
-    }
-
-    fn select_multiple(
-        &self,
-        key: &str,
-        values: &[toml::Value],
-    ) -> Result<Vec<JinjaValue>> {
-        self.interaction.select_multiple(key, values)
-    }
-}
-
-pub struct NoUserInteraction;
-
-impl NoUserInteraction {
-    fn get_suggestions(&self, key: &str, values: &[toml::Value]) -> String {
-        values
-            .iter()
-            .take(10)
-            .filter_map(|v| match (v.get("value"), v.get("name")) {
-                (Some(v), Some(n)) => Some(format!("{key}={v} => {n}")),
-                _ => None,
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
-    }
-}
-
-impl UserInteraction for NoUserInteraction {
-    fn prompt(&self, key: &str, fallback: Option<&str>) -> Result<String> {
-        if let Some(val) = fallback.map(ToString::to_string) {
-            return Ok(val);
-        }
-        bail!("Replacement not found: {key}");
-    }
-
-    fn select(&self, key: &str, values: &[toml::Value]) -> Result<JinjaValue> {
-        let suggestions = self.get_suggestions(key, values);
-        bail!("Replacement not selected: {key}\nSuggestions:\n{suggestions}");
-    }
-
-    fn select_multiple(
-        &self,
-        key: &str,
-        values: &[toml::Value],
-    ) -> Result<Vec<JinjaValue>> {
-        let suggestions = self.get_suggestions(key, values);
-        bail!("Replacement not selected: {key}\nSuggestions:\n{suggestions}");
-    }
-}
-
-pub struct CliUserInteraction;
-
-impl UserInteraction for CliUserInteraction {
-    fn prompt(&self, key: &str, fallback: Option<&str>) -> Result<String> {
-        prompt_user(key, fallback)
-    }
-
-    fn select(&self, key: &str, values: &[toml::Value]) -> Result<JinjaValue> {
         select_replacement(key, values)
     }
 
     fn select_multiple(
         &self,
         key: &str,
-        values: &[Value],
+        values: &[toml::Value],
     ) -> Result<Vec<JinjaValue>> {
         select_replacement_multiple(key, values)
     }

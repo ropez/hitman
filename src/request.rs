@@ -6,26 +6,27 @@ use std::{
     time::Duration,
 };
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use futures::StreamExt;
 use graphql_parser::query::{
     Definition, OperationDefinition, VariableDefinition,
 };
 
-use log::{info, log_enabled, warn, Level};
+use log::{Level, info, log_enabled, warn};
 use reqwest::{
-    header::{HeaderMap, CONTENT_TYPE},
     Client, Method, Response, Url,
+    header::{CONTENT_TYPE, HeaderMap},
 };
-use serde_json::{json, Value};
-use spinoff::{spinners, Color, Spinner, Streams};
+use serde_json::{Value, json};
+use spinoff::{Color, Spinner, Streams, spinners};
 
 use crate::{
-    env::{update_data, HitmanCookieJar},
+    env::{HitmanCookieJar, update_data},
     extract::extract_variables,
-    prompt::{get_interaction, prepare_request_interactive},
+    prompt::get_interaction,
     resolve::Resolved,
     scope::Scope,
+    substitute::prepare_request,
     util::truncate,
 };
 
@@ -113,10 +114,9 @@ pub fn build_client(root_dir: &Path) -> Result<Client> {
 pub async fn make_request(resolved: &Resolved, scope: &Scope) -> Result<()> {
     let client = build_client(&resolved.root_dir)?;
 
-    let interaction = get_interaction();
+    let interaction = get_interaction(scope.clone());
 
-    let req =
-        prepare_request_interactive(resolved, scope, interaction)?;
+    let req = prepare_request(resolved, interaction)?;
 
     print_request(&req);
 

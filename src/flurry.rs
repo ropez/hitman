@@ -1,16 +1,17 @@
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use futures::future::join_all;
 use log::warn;
-use spinoff::{spinners, Color, Spinner, Streams};
+use spinoff::{Color, Spinner, Streams, spinners};
 use std::time::Duration;
 use tokio::spawn;
 
 use crate::{
-    prompt::{get_interaction, prepare_request_interactive},
+    prompt::get_interaction,
     request::{build_client, do_request},
     resolve::Resolved,
     scope::Scope,
-    util::{split_work, IterExt},
+    substitute::prepare_request,
+    util::{IterExt, split_work},
 };
 
 pub async fn flurry_attack(
@@ -30,9 +31,8 @@ pub async fn flurry_attack(
 
     warn!("# Sending {flurry_size} requests on {connections} parallel connections...");
 
-    let interaction = get_interaction();
-    let req =
-        prepare_request_interactive(resolved, scope, interaction)?;
+    let interaction = get_interaction(scope.clone());
+    let req = prepare_request(resolved, interaction)?;
 
     let t = std::time::Instant::now();
     let mut spinner = Spinner::new_with_stream(
