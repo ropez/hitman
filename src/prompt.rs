@@ -97,41 +97,46 @@ impl<I> SubstituteProvider for Handler<I>
 where
     I: UserInteraction + Send + Sync + ?Sized + 'static,
 {
-    fn lookup_replacement(&self, key: &str, fallback: Option<&str>) -> SubstituteValue {
-        {
-            let vars = self.vars.read().unwrap();
-            if let Some(v) = vars.get(key) {
-                return v.clone();
-            }
+    fn lookup_value(&self, key: &str) -> Option<SubstituteValue> {
+        if let Some(v) = self.vars.read().unwrap().get(key) {
+            return Some(v.clone());
         }
 
-        let val = match self.scope.lookup(key).unwrap() {
+        match self.scope.lookup(key).ok()? {
+            Replacement::ValueNotFound { .. } => None,
             Replacement::Value(v) => {
-                SubstituteValue::Single(JinjaValue::from(v))
+                Some(SubstituteValue::Single(JinjaValue::from(v)))
             }
-            Replacement::ValueNotFound { key } => SubstituteValue::Single(
-                JinjaValue::from(self.interaction.prompt(&key, fallback).unwrap()),
-            ),
             Replacement::MultipleValuesFound { key: _, values } => {
-                SubstituteValue::Multiple(values)
+                Some(SubstituteValue::Multiple(values))
             }
-        };
-
-        let mut vars_mut = self.vars.write().unwrap();
-        vars_mut.insert(key.to_string(), val.clone());
-        val
+        }
     }
 
-    fn select_single(&self, key: &str, values: &[toml::Value]) -> JinjaValue {
-        self.interaction.select(key, values).unwrap()
+    fn prompt(&self, key: &str, fallback: Option<&str>) -> Result<JinjaValue> {
+        let val = self.interaction.prompt(key, fallback)?;
+        let value = JinjaValue::from(val);
+
+        let mut vars_mut = self.vars.write().unwrap();
+        vars_mut
+            .insert(key.to_string(), SubstituteValue::Single(value.clone()));
+        Ok(value)
+    }
+
+    fn select_single(
+        &self,
+        key: &str,
+        values: &[toml::Value],
+    ) -> Result<JinjaValue> {
+        self.interaction.select(key, values)
     }
 
     fn select_multiple(
         &self,
         key: &str,
         values: &[toml::Value],
-    ) -> Vec<JinjaValue> {
-        self.interaction.select_multiple(key, values).unwrap()
+    ) -> Result<Vec<JinjaValue>> {
+        self.interaction.select_multiple(key, values)
     }
 }
 

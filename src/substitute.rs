@@ -1,4 +1,3 @@
-use std::cell::Cell;
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
@@ -22,10 +21,6 @@ use crate::{
     resolve::{Resolved, ResolvedAs},
 };
 
-thread_local! {
-    static FALLBACK: Cell<Option<String>> = const { Cell::new(None) };
-}
-
 #[derive(Debug, Clone)]
 pub enum SubstituteValue {
     Single(Value),
@@ -33,13 +28,22 @@ pub enum SubstituteValue {
 }
 
 pub trait SubstituteProvider {
-    fn lookup_replacement(
+    fn lookup_value(&self, key: &str) -> Option<SubstituteValue>;
+    fn prompt(
         &self,
         key: &str,
         fallback: Option<&str>,
-    ) -> SubstituteValue;
-    fn select_single(&self, key: &str, values: &[toml::Value]) -> Value;
-    fn select_multiple(&self, key: &str, values: &[toml::Value]) -> Vec<Value>;
+    ) -> anyhow::Result<Value>;
+    fn select_single(
+        &self,
+        key: &str,
+        values: &[toml::Value],
+    ) -> anyhow::Result<Value>;
+    fn select_multiple(
+        &self,
+        key: &str,
+        values: &[toml::Value],
+    ) -> anyhow::Result<Vec<Value>>;
 }
 
 impl fmt::Debug for dyn SubstituteProvider + Send + Sync {
@@ -64,18 +68,59 @@ impl TrackingContext {
 impl Object for TrackingContext {
     fn get_value(self: &Arc<Self>, key: &Value) -> Option<Value> {
         let key_str = key.as_str()?;
-        let val = self.provider.lookup_replacement(key_str, None);
 
-        Some(match val {
-            SubstituteValue::Single(value) => value,
-            SubstituteValue::Multiple(values) => Value::from_object({
-                SingleSelect {
-                    provider: self.provider.clone(),
-                    key: key_str.to_string(),
-                    values,
-                }
+        let res = match self.provider.lookup_value(key_str) {
+            None => Value::from_object(PendingValue {
+                provider: self.provider.clone(),
+                key: key_str.to_string(),
+                fallback: None,
             }),
-        })
+            Some(val) => match val {
+                SubstituteValue::Single(value) => value,
+                SubstituteValue::Multiple(values) => Value::from_object({
+                    SingleSelect {
+                        provider: self.provider.clone(),
+                        key: key_str.to_string(),
+                        values,
+                    }
+                }),
+            },
+        };
+        Some(res)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct PendingValue {
+    provider: Arc<dyn SubstituteProvider + Send + Sync + 'static>,
+    key: String,
+    fallback: Option<String>,
+}
+
+impl PendingValue {
+    fn with_fallback(&self, value: String) -> Self {
+        Self {
+            provider: self.provider.clone(),
+            key: self.key.clone(),
+            fallback: Some(value),
+        }
+    }
+}
+
+impl Object for PendingValue {
+    fn repr(self: &Arc<Self>) -> ObjectRepr {
+        ObjectRepr::Plain
+    }
+
+    fn render(
+        self: &Arc<Self>,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
+        let value = self
+            .provider
+            .prompt(&self.key, self.fallback.as_deref())
+            .unwrap();
+        write!(f, "{value}")
     }
 }
 
@@ -95,8 +140,10 @@ impl Object for SingleSelect {
         self: &Arc<Self>,
         f: &mut std::fmt::Formatter<'_>,
     ) -> std::fmt::Result {
-        let value = self.provider.select_single(&self.key, &self.values);
-
+        let value = self
+            .provider
+            .select_single(&self.key, &self.values)
+            .unwrap();
         write!(f, "{value}")
     }
 }
@@ -114,18 +161,22 @@ impl Object for MultiSelect {
     }
 
     fn enumerate(self: &Arc<Self>) -> Enumerator {
-        let values = self.provider.select_multiple(&self.key, &self.values);
-
-        Enumerator::Values(values.clone())
+        if let Ok(values) =
+            self.provider.select_multiple(&self.key, &self.values)
+        {
+            Enumerator::Values(values)
+        } else {
+            Enumerator::NonEnumerable
+        }
     }
 }
 
 pub fn prepare_request(
     resolved: &Resolved,
-    handler: Arc<dyn SubstituteProvider + Send + Sync + 'static>,
+    provider: Arc<dyn SubstituteProvider + Send + Sync + 'static>,
 ) -> anyhow::Result<HitmanRequest> {
     let input = read_to_string(resolved.http_file())?;
-    let buf = substitute(input, handler.clone())?;
+    let buf = substitute(input, provider.clone())?;
 
     let mut headers_buf = [httparse::EMPTY_HEADER; 64];
     let mut req = httparse::Request::new(&mut headers_buf);
@@ -155,15 +206,17 @@ pub fn prepare_request(
                     HashMap::new();
 
                 for key in args {
-                    let value =
-                        match handler.lookup_replacement(&key.name, None) {
-                            SubstituteValue::Single(value) => {
-                                serde_json::to_value(value)
-                            }
-                            SubstituteValue::Multiple(values) => {
-                                serde_json::to_value(values)
-                            }
-                        }?;
+                    let value = match provider.lookup_value(&key.name) {
+                        None => serde_json::to_value(
+                            provider.prompt(&key.name, None)?,
+                        ),
+                        Some(SubstituteValue::Single(value)) => {
+                            serde_json::to_value(value)
+                        }
+                        Some(SubstituteValue::Multiple(values)) => {
+                            serde_json::to_value(values)
+                        }
+                    }?;
 
                     map.insert(key.name, value);
                 }
@@ -208,10 +261,9 @@ pub fn prepare_request(
 
 pub fn substitute(
     input: String,
-    handler: Arc<dyn SubstituteProvider + Send + Sync + 'static>,
+    provider: Arc<dyn SubstituteProvider + Send + Sync + 'static>,
 ) -> anyhow::Result<String> {
-    FALLBACK.set(None);
-    let ctx = TrackingContext::new(handler);
+    let ctx = TrackingContext::new(provider);
 
     let mut env = Environment::new();
     env.set_undefined_behavior(UndefinedBehavior::Strict);
@@ -235,16 +287,16 @@ pub fn substitute(
     env.add_filter("select_one", |v: Value| v);
 
     env.add_filter("fallback", move |v: Value, fallback: String| {
-        if v.is_undefined() {
-            FALLBACK.set(Some(fallback));
+        if let Some(obj) = v.downcast_object_ref::<PendingValue>() {
+            Value::from_object(obj.with_fallback(fallback))
+        } else {
+            v
         }
-        v
     });
 
     let ctx_val = Value::from_object(ctx);
 
-    let res = env.render_str(&input, ctx_val)?;
-    Ok(res)
+    Ok(env.render_str(&input, ctx_val)?)
 }
 
 #[cfg(test)]
