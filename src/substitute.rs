@@ -136,6 +136,12 @@ impl Object for SingleSelect {
         ObjectRepr::Plain
     }
 
+    // Allow Jinja built-ins like 'for' and 'map' on the entire list
+    fn enumerate(self: &Arc<Self>) -> Enumerator {
+        let values = self.values.iter().map(Value::from_serialize).collect();
+        Enumerator::Values(values)
+    }
+
     fn render(
         self: &Arc<Self>,
         f: &mut std::fmt::Formatter<'_>,
@@ -296,7 +302,7 @@ pub fn substitute(
 
     let ctx_val = Value::from_object(ctx);
 
-    Ok(env.render_str(&input, ctx_val)?)
+    Ok(env.render_str(input, ctx_val)?)
 }
 
 #[cfg(test)]
