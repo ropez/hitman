@@ -7,14 +7,6 @@ license = "MIT"
 homepage = "https://github.com/ropez/hitman"
 repository = "https://github.com/ropez/hitman"
 
-[[bin]]
-name = "hitman"
-path = "src/main.rs"
-
-[[bin]]
-name = "hitman-ui"
-path = "src/main_ui.rs"
-
 [dependencies]
 chrono = "0.4.31"
 clap = { version = "4.4", features = ["derive"] }
@@ -34,12 +26,7 @@ walkdir = "2"
 notify = "7.0.0"
 spinoff = { version = "0.8.0", features = ["dots"] }
 anyhow = "1.0.78"
-crossterm = "0.28.1"
-ratatui = "0.29.0"
 fuzzy-matcher = "0.3.7"
-tui-input = "0.11.0"
-syntect-tui = "3.0.4"
-syntect = "5.2.0"
 graphql-parser = "0.4.0"
 minijinja = { version = "2", features = ["json"] }
 
