@@ -31,6 +31,14 @@ pub fn is_interactive_mode() -> bool {
     get_boolean("interactive")
 }
 
+pub fn set_insecure_ssl(enable: bool) {
+    set_boolean("insecure-ssl", enable);
+}
+
+pub fn has_insecure_ssl() -> bool {
+    get_boolean("insecure-ssl")
+}
+
 pub fn fuzzy_match(filter: &str, value: &str) -> Option<i64> {
     let matcher = SkimMatcherV2::default();
     let fuzzy_score = matcher.fuzzy(value, filter, true);

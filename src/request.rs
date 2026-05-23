@@ -23,7 +23,7 @@ use spinoff::{spinners, Color, Spinner, Streams};
 use crate::{
     env::{update_data, HitmanCookieJar},
     extract::extract_variables,
-    prompt::{get_interaction, prepare_request_interactive},
+    prompt::{get_interaction, has_insecure_ssl, prepare_request_interactive},
     resolve::Resolved,
     scope::Scope,
     util::truncate,
@@ -105,6 +105,7 @@ static USER_AGENT: &str =
 pub fn build_client(root_dir: &Path) -> Result<Client> {
     let client = Client::builder()
         .user_agent(USER_AGENT)
+        .danger_accept_invalid_certs(has_insecure_ssl())
         .cookie_provider(Arc::new(HitmanCookieJar::new(root_dir)))
         .build()?;
     Ok(client)

@@ -41,6 +41,10 @@ pub struct Args {
     #[arg(short, long)]
     pub quiet: bool,
 
+    /// Skip SSL certificate validation
+    #[arg(short('k'), long)]
+    pub insecure: bool,
+
     /// Do not ask questions
     #[arg(short, long, requires = "name")]
     pub non_interactive: bool,

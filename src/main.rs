@@ -12,7 +12,7 @@ use hitman::env::{
 };
 use hitman::flurry::flurry_attack;
 use hitman::monitor::monitor;
-use hitman::prompt::{fuzzy_match, set_interactive_mode};
+use hitman::prompt::{fuzzy_match, set_insecure_ssl, set_interactive_mode};
 use hitman::request::make_request;
 
 use watcher::Watcher;
@@ -31,6 +31,7 @@ async fn main() -> Result<()> {
         args.flurry.is_some() || args.monitor.is_some(),
     )?;
 
+    set_insecure_ssl(args.insecure);
     set_interactive_mode(!(args.non_interactive || args.watch));
 
     if let Some(arg) = args.select {
