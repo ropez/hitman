@@ -1,6 +1,6 @@
 use log::{
-    set_boxed_logger, set_max_level, Level, LevelFilter, Log, Metadata, Record,
-    SetLoggerError,
+    Level, LevelFilter, Log, Metadata, Record, SetLoggerError,
+    set_boxed_logger, set_max_level,
 };
 use std::{
     io::{self, IsTerminal, Write},

@@ -1,8 +1,8 @@
 use anyhow::{Context, Result};
 use inquire::Select;
 use log::warn;
-use reqwest::cookie::CookieStore;
 use reqwest::Url;
+use reqwest::cookie::CookieStore;
 use std::fs::{self, read_to_string};
 use std::path::{Path, PathBuf};
 use std::string::ToString;
@@ -51,7 +51,8 @@ impl CookieStore for HitmanCookieJar {
     }
 
     fn cookies(&self, _: &Url) -> Option<reqwest::header::HeaderValue> {
-        let data_file = read_toml(&self.root_dir.join(DATA_FILE)).ok().flatten()?;
+        let data_file =
+            read_toml(&self.root_dir.join(DATA_FILE)).ok().flatten()?;
 
         match data_file.get(COOKIE_KEY)? {
             Value::Array(arr) => {
@@ -198,7 +199,7 @@ fn merge(config: &mut TomlTable, other: TomlTable) {
     other.into_iter().for_each(move |(k, v)| match v {
         Value::Table(t) => {
             let cur = config.get_mut(&k);
-            if let Some(Value::Table(ref mut ext)) = cur {
+            if let Some(Value::Table(ext)) = cur {
                 merge(ext, t);
             } else {
                 config.insert(k, Value::Table(t));
@@ -213,7 +214,8 @@ fn merge(config: &mut TomlTable, other: TomlTable) {
 fn read_toml(file_path: &Path) -> Result<Option<TomlTable>> {
     match fs::read_to_string(file_path) {
         Ok(content) => {
-            let cfg = toml::from_str::<TomlTable>(&content).with_context(|| format!("When reading {file_path:?}"))?;
+            let cfg = toml::from_str::<TomlTable>(&content)
+                .with_context(|| format!("When reading {file_path:?}"))?;
 
             Ok(Some(cfg))
         }

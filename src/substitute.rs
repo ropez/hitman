@@ -1,8 +1,8 @@
-use anyhow::{bail, Context};
+use anyhow::{Context, bail};
 use httparse::Status;
 use reqwest::{
-    header::{HeaderMap, HeaderName, HeaderValue},
     Method, Url,
+    header::{HeaderMap, HeaderName, HeaderValue},
 };
 use std::{
     collections::HashMap,
@@ -11,7 +11,7 @@ use std::{
 };
 
 use crate::{
-    request::{find_args, HitmanBody, HitmanRequest},
+    request::{HitmanBody, HitmanRequest, find_args},
     resolve::{Resolved, ResolvedAs},
 };
 
@@ -50,7 +50,7 @@ pub fn prepare_request(
                 key,
                 fallback,
                 multiple,
-            })
+            });
         }
     };
 

@@ -9,9 +9,8 @@ use ratatui::{
 };
 
 use super::{
-    centered,
-    keymap::{mapkey, KeyMapping},
-    Component, PromptComponent, PromptIntent,
+    Component, PromptComponent, PromptIntent, centered,
+    keymap::{KeyMapping, mapkey},
 };
 
 pub struct DatePicker {

@@ -1,8 +1,8 @@
 use crossterm::event::Event;
 use hitman::substitute::SubstitutionValue;
 use ratatui::{
-    layout::{Constraint, Direction, Layout, Rect},
     Frame,
+    layout::{Constraint, Direction, Layout, Rect},
 };
 
 pub mod app;

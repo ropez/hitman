@@ -24,10 +24,10 @@ pub enum KeyMapping {
 }
 
 pub fn mapkey(event: &Event) -> KeyMapping {
-    if let Event::Key(key) = event {
-        if key.kind == KeyEventKind::Press {
-            return mapkey_keypress(key);
-        }
+    if let Event::Key(key) = event
+        && key.kind == KeyEventKind::Press
+    {
+        return mapkey_keypress(key);
     }
 
     KeyMapping::None

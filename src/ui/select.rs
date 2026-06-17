@@ -2,6 +2,7 @@ use crossterm::event::Event;
 use fuzzy_matcher::skim::SkimMatcherV2;
 use hitman::substitute::SubstitutionValue;
 use ratatui::{
+    Frame,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Style, Stylize},
     symbols::{border, line},
@@ -10,13 +11,12 @@ use ratatui::{
         Block, Borders, Clear, HighlightSpacing, List, ListItem, ListState,
         Paragraph,
     },
-    Frame,
 };
-use tui_input::{backend::crossterm::EventHandler, Input};
+use tui_input::{Input, backend::crossterm::EventHandler};
 
 use super::{
-    keymap::{mapkey, KeyMapping},
     Component, InteractiveComponent, PromptComponent, PromptIntent,
+    keymap::{KeyMapping, mapkey},
 };
 
 #[derive(Default)]
@@ -358,13 +358,13 @@ where
                 return Some(SelectIntent::Abort);
             }
             KeyMapping::None => {
-                if let Some(change) = self.search_input.handle_event(event) {
-                    if change.value {
-                        self.select_first();
-                        return Some(SelectIntent::Change(
-                            self.selected_item().cloned(),
-                        ));
-                    }
+                if let Some(change) = self.search_input.handle_event(event)
+                    && change.value
+                {
+                    self.select_first();
+                    return Some(SelectIntent::Change(
+                        self.selected_item().cloned(),
+                    ));
                 }
             }
             _ => (),

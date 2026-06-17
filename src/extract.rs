@@ -1,4 +1,4 @@
-use anyhow::{anyhow, bail, Result};
+use anyhow::{Result, anyhow, bail};
 use log::info;
 use toml::{Table, Value};
 
@@ -29,16 +29,12 @@ pub fn extract_variables(data: &JsonValue, scope: &Scope) -> Result<Table> {
                         }
                         if let Some(JsonValue::Number(val)) =
                             selector.find(data).next()
+                            && let Some(integer) = val.as_i64()
                         {
-                            if let Some(integer) = val.as_i64() {
-                                let msg =
-                                    format!("# Got integer '{key}' = '{val}'");
-                                info!("{}", truncate(&msg));
-                                out.insert(
-                                    key.clone(),
-                                    Value::Integer(integer),
-                                );
-                            }
+                            let msg =
+                                format!("# Got integer '{key}' = '{val}'");
+                            info!("{}", truncate(&msg));
+                            out.insert(key.clone(), Value::Integer(integer));
                         }
                     }
                     Value::Table(conf) => {

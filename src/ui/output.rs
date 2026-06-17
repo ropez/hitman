@@ -3,11 +3,11 @@ use std::time::Duration;
 use crossterm::event::Event;
 use hitman::request::HitmanRequest;
 use ratatui::{
+    Frame,
     layout::Rect,
     style::{Style, Stylize},
     text::{Line, Span, Text},
     widgets::{Block, Borders, Paragraph, Wrap},
-    Frame,
 };
 use syntect::{
     easy::HighlightLines,
@@ -18,8 +18,8 @@ use syntect::{
 use syntect_tui::into_span;
 
 use super::{
-    keymap::{mapkey, KeyMapping},
     Component, InteractiveComponent,
+    keymap::{KeyMapping, mapkey},
 };
 
 #[derive(Clone)]
@@ -58,7 +58,7 @@ pub enum Content {
     #[default]
     Empty,
     Preview(String),
-    Request(HttpRequestInfo),
+    Request(Box<HttpRequestInfo>),
 }
 
 pub struct OutputView {
@@ -91,7 +91,7 @@ impl OutputView {
         }
 
         self.scroll = (0, 0);
-        self.content = Content::Request(info);
+        self.content = Content::Request(Box::new(info));
     }
 
     pub fn reset(&mut self) {
@@ -131,7 +131,7 @@ impl OutputView {
         s
     }
 
-    fn make_lines(&self) -> Vec<Line> {
+    fn make_lines(&self) -> Vec<Line<'_>> {
         let mut lines: Vec<Line> = Vec::new();
 
         match &self.content {
@@ -272,7 +272,7 @@ impl SyntaxHighlighter {
         }
     }
 
-    fn lines(&self) -> Option<Vec<Line>> {
+    fn lines(&self) -> Option<Vec<Line<'_>>> {
         self.cache.as_ref().map(|lines| {
             lines
                 .iter()

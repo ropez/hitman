@@ -1,7 +1,7 @@
 use anyhow::Result;
 use notify::{
-    recommended_watcher, Event, RecommendedWatcher, RecursiveMode,
-    Watcher as _Watcher,
+    Event, RecommendedWatcher, RecursiveMode, Watcher as _Watcher,
+    recommended_watcher,
 };
 use std::path::PathBuf;
 
