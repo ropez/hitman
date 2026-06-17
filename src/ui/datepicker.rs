@@ -1,5 +1,5 @@
 use chrono::{Datelike, Days, Local, Months, NaiveDate, Weekday};
-use hitman::substitute::SubstitutionValue;
+use minijinja::Value as JinjaValue;
 use ratatui::{
     layout::{Constraint, Layout},
     prelude::{Alignment::Center, Margin},
@@ -153,9 +153,10 @@ impl PromptComponent for DatePicker {
                     self.selected.checked_add_days(Days::new(1)).unwrap();
             }
             KeyMapping::Accept => {
-                return Some(PromptIntent::Accept(SubstitutionValue::Single(
-                    format!("{}", self.selected),
-                )));
+                return Some(PromptIntent::Accept(JinjaValue::from(format!(
+                    "{}",
+                    self.selected
+                ))));
             }
             KeyMapping::Abort => {
                 return Some(PromptIntent::Abort);

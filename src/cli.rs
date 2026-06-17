@@ -25,7 +25,7 @@ pub struct Args {
         conflicts_with = "name",
         conflicts_with = "repeat",
         conflicts_with = "flurry",
-        conflicts_with = "watch",
+        conflicts_with = "watch"
     )]
     pub select: Option<Option<String>>,
 

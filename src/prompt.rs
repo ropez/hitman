@@ -1,6 +1,7 @@
 use anyhow::{bail, Result};
 use fuzzy_matcher::skim::SkimMatcherV2;
 use inquire::{list_option::ListOption, DateSelect, MultiSelect, Select, Text};
+use minijinja::Value as JinjaValue;
 use std::{collections::HashMap, env, string::ToString};
 use toml::Value;
 
@@ -11,7 +12,6 @@ use crate::{
     substitute::{
         prepare_request,
         Substitution::{Complete, ValueMissing},
-        SubstitutionValue,
     },
 };
 
@@ -55,12 +55,12 @@ pub fn get_interaction() -> Box<dyn UserInteraction> {
 
 pub trait UserInteraction {
     fn prompt(&self, key: &str, fallback: Option<&str>) -> Result<String>;
-    fn select(&self, key: &str, values: &[Value]) -> Result<String>;
+    fn select(&self, key: &str, values: &[Value]) -> Result<JinjaValue>;
     fn select_multiple(
         &self,
         key: &str,
         values: &[Value],
-    ) -> Result<Vec<String>>;
+    ) -> Result<JinjaValue>;
 }
 
 pub fn prepare_request_interactive<I>(
@@ -71,7 +71,7 @@ pub fn prepare_request_interactive<I>(
 where
     I: UserInteraction + ?Sized,
 {
-    let mut vars = HashMap::new();
+    let mut vars: HashMap<String, JinjaValue> = HashMap::new();
 
     loop {
         match prepare_request(resolved, &vars)? {
@@ -82,23 +82,15 @@ where
                 multiple,
             } => {
                 let value = match scope.lookup(&key)? {
-                    Replacement::Value(value) => {
-                        SubstitutionValue::Single(value)
-                    }
-                    Replacement::ValueNotFound { key } => {
-                        SubstitutionValue::Single(
-                            interaction.prompt(&key, fallback.as_deref())?,
-                        )
-                    }
+                    Replacement::Value(value) => JinjaValue::from(value),
+                    Replacement::ValueNotFound { key } => JinjaValue::from(
+                        interaction.prompt(&key, fallback.as_deref())?,
+                    ),
                     Replacement::MultipleValuesFound { key, values } => {
                         if multiple {
-                            SubstitutionValue::Multiple(
-                                interaction.select_multiple(&key, &values)?,
-                            )
+                            interaction.select_multiple(&key, &values)?
                         } else {
-                            SubstitutionValue::Single(
-                                interaction.select(&key, &values)?,
-                            )
+                            interaction.select(&key, &values)?
                         }
                     }
                 };
@@ -130,11 +122,10 @@ impl UserInteraction for NoUserInteraction {
         if let Some(val) = fallback.map(ToString::to_string) {
             return Ok(val);
         }
-
         bail!("Replacement not found: {key}");
     }
 
-    fn select(&self, key: &str, values: &[toml::Value]) -> Result<String> {
+    fn select(&self, key: &str, values: &[toml::Value]) -> Result<JinjaValue> {
         let suggestions = self.get_suggestions(key, values);
         bail!("Replacement not selected: {key}\nSuggestions:\n{suggestions}");
     }
@@ -143,7 +134,7 @@ impl UserInteraction for NoUserInteraction {
         &self,
         key: &str,
         values: &[toml::Value],
-    ) -> Result<Vec<String>> {
+    ) -> Result<JinjaValue> {
         let suggestions = self.get_suggestions(key, values);
         bail!("Replacement not selected: {key}\nSuggestions:\n{suggestions}");
     }
@@ -156,7 +147,7 @@ impl UserInteraction for CliUserInteraction {
         prompt_user(key, fallback)
     }
 
-    fn select(&self, key: &str, values: &[toml::Value]) -> Result<String> {
+    fn select(&self, key: &str, values: &[toml::Value]) -> Result<JinjaValue> {
         select_replacement(key, values)
     }
 
@@ -164,7 +155,7 @@ impl UserInteraction for CliUserInteraction {
         &self,
         key: &str,
         values: &[Value],
-    ) -> Result<Vec<String>> {
+    ) -> Result<JinjaValue> {
         select_replacement_multiple(key, values)
     }
 }
@@ -198,7 +189,7 @@ fn prompt_for_date(key: &str) -> Result<Option<String>> {
     Ok(res.map(formatter))
 }
 
-fn select_replacement(key: &str, values: &[Value]) -> Result<String> {
+fn select_replacement(key: &str, values: &[Value]) -> Result<JinjaValue> {
     let list_options = values_to_list_options(values);
     let selected =
         Select::new(&format!("Select value for {key}"), list_options)
@@ -206,13 +197,15 @@ fn select_replacement(key: &str, values: &[Value]) -> Result<String> {
             .with_page_size(15)
             .prompt()?;
 
-    list_option_to_string(key, values, &selected)
+    Ok(JinjaValue::from(list_option_to_string(
+        key, values, &selected,
+    )?))
 }
 
 fn select_replacement_multiple(
     key: &str,
     values: &[Value],
-) -> Result<Vec<String>> {
+) -> Result<JinjaValue> {
     let list_options = values_to_list_options(values);
     let selected =
         MultiSelect::new(&format!("Select value for {key}"), list_options)
@@ -220,10 +213,14 @@ fn select_replacement_multiple(
             .with_page_size(15)
             .prompt()?;
 
-    selected
+    let items: Vec<JinjaValue> = selected
         .iter()
-        .map(|item| list_option_to_string(key, values, item))
-        .collect()
+        .map(|item| {
+            list_option_to_string(key, values, item).map(JinjaValue::from)
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    Ok(JinjaValue::from(items))
 }
 
 fn values_to_list_options(values: &[Value]) -> Vec<ListOption<String>> {

@@ -33,9 +33,9 @@ use hitman::{
     substitute::{
         prepare_request,
         Substitution::{Complete, ValueMissing},
-        SubstitutionValue,
     },
 };
+use minijinja::Value as JinjaValue;
 
 use super::{
     centered,
@@ -46,11 +46,16 @@ use super::{
     output::{HttpRequestInfo, RequestStatus},
     progress::Progress,
     prompt::SimplePrompt,
-    select::{
-        PromptSelectItem, RequestSelector, Select, SelectIntent, SelectItem,
-    },
+    select::{RequestSelector, Select, SelectIntent, SelectItem},
     Component, InteractiveComponent, PromptComponent, PromptIntent,
 };
+
+// Used by UI layer to track whether a single or multiple values were selected
+#[derive(Debug, Clone)]
+pub enum SubstitutionValue<T> {
+    Single(T),
+    Multiple(Vec<T>),
+}
 
 pub trait Screen {
     type B: Backend;
@@ -80,7 +85,7 @@ pub enum AppState {
     PendingValue {
         file_path: String,
         key: String,
-        pending_vars: HashMap<String, SubstitutionValue<String>>,
+        pending_vars: HashMap<String, JinjaValue>,
         component: Box<dyn PromptComponent>,
     },
 
@@ -106,12 +111,12 @@ pub enum Intent {
     PreviewRequest(Option<String>),
     PrepareRequest {
         file_path: String,
-        vars: HashMap<String, SubstitutionValue<String>>,
+        vars: HashMap<String, JinjaValue>,
     },
     AskForValue {
         key: String,
         file_path: String,
-        pending_vars: HashMap<String, SubstitutionValue<String>>,
+        pending_vars: HashMap<String, JinjaValue>,
         params: AskForValueParams,
     },
     SendRequest {
@@ -321,7 +326,7 @@ impl App {
     fn try_request(
         &self,
         file_path: String,
-        mut vars: HashMap<String, SubstitutionValue<String>>,
+        mut vars: HashMap<String, JinjaValue>,
     ) -> Result<Option<Intent>> {
         // FIXME Call resolve_path and load_env once, and keep result in state
 
@@ -342,7 +347,7 @@ impl App {
 
                 match scope.lookup(&key)? {
                     Replacement::Value(value) => {
-                        vars.insert(key, SubstitutionValue::Single(value));
+                        vars.insert(key, JinjaValue::from(value));
                         Some(Intent::PrepareRequest { file_path, vars })
                     }
                     Replacement::MultipleValuesFound { key, values } => {
@@ -561,14 +566,13 @@ impl InteractiveComponent for App {
                                 PromptIntent::Abort => {
                                     return Some(Abort);
                                 }
-                                PromptIntent::Accept(s) => match s {
-                                    SubstitutionValue::Single(s) => {
-                                        return Some(AcceptNewRequest(s))
-                                    }
-                                    SubstitutionValue::Multiple(_) => {
-                                        unreachable!("Can never accept multiple requests")
-                                    }
-                                },
+                                PromptIntent::Accept(v) => {
+                                    let s = v
+                                        .as_str()
+                                        .unwrap_or_default()
+                                        .to_string();
+                                    return Some(AcceptNewRequest(s));
+                                }
                             }
                         }
                     }
@@ -606,7 +610,7 @@ impl InteractiveComponent for App {
 fn convert_prompt_intent(
     key: &str,
     file_path: &str,
-    pending_vars: &HashMap<String, SubstitutionValue<String>>,
+    pending_vars: &HashMap<String, JinjaValue>,
     intent: PromptIntent,
 ) -> Intent {
     match intent {
@@ -785,19 +789,6 @@ impl SelectItem for Value {
                 Some(Self::String(value)) => value.clone(),
                 Some(value) => value.to_string(),
                 None => t.to_string(),
-            },
-            other => other.to_string(),
-        }
-    }
-}
-
-impl PromptSelectItem for Value {
-    fn to_value(&self) -> String {
-        match self {
-            Self::Table(t) => match t.get("value") {
-                Some(Self::String(value)) => value.clone(),
-                Some(value) => value.to_string(),
-                _ => t.to_string(),
             },
             other => other.to_string(),
         }

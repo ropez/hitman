@@ -1,5 +1,5 @@
 use crossterm::event::Event;
-use hitman::substitute::SubstitutionValue;
+use minijinja::Value as JinjaValue;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     Frame,
@@ -26,7 +26,7 @@ pub trait InteractiveComponent: Component {
 
 pub enum PromptIntent {
     Abort,
-    Accept(SubstitutionValue<String>),
+    Accept(JinjaValue),
 }
 
 pub trait PromptComponent: Component {
