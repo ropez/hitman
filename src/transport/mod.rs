@@ -5,6 +5,7 @@ use reqwest::Client;
 use serde_json::Value;
 
 use crate::{
+    http_file,
     resolve::{Resolved, ResolvedAs},
     substitute::{self, SubstituteProvider},
 };
@@ -68,40 +69,29 @@ pub fn prepare_request(
 }
 
 fn parse_local_variables(input: &str) -> Result<(String, HashMap<String, minijinja::Value>)> {
-    let mut values = HashMap::new();
-    let mut body_start = 0;
-    let mut declarations_started = false;
-
-    for line in input.split_inclusive('\n') {
-        let trimmed = line.trim_end_matches(['\r', '\n']);
-        let declaration = trimmed
-            .split_once('#')
-            .map_or(trimmed, |(before, _)| before)
-            .trim_end();
-
-        if let Some(declaration) = declaration.strip_prefix('@') {
-            declarations_started = true;
-            let (key, value) = declaration.split_once('=').ok_or_else(|| {
-                anyhow::anyhow!(
-                    "Invalid variable declaration `{declaration}`; expected `@name = value`"
-                )
-            })?;
-            let key = key.trim();
-            if key.is_empty() || !key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
-                anyhow::bail!("Invalid variable name `{key}` in declaration `{declaration}`");
-            }
-            values.insert(
-                key.to_string(),
-                minijinja::Value::from(value.trim().to_string()),
-            );
-            body_start += line.len();
-        } else if declarations_started && trimmed.trim().is_empty() {
-            body_start += line.len();
-        } else {
-            break;
-        }
+    let document = http_file::parse(input);
+    if let Some(error) = document
+        .errors
+        .iter()
+        .find(|error| document.request.is_none() || error.range.start < document.request_start)
+    {
+        anyhow::bail!("{}", error.message);
     }
-
+    let body_start = if document.variables.is_empty() {
+        0
+    } else {
+        document.request_start
+    };
+    let values = document
+        .variables
+        .into_iter()
+        .map(|variable| {
+            (
+                variable.name.text.to_string(),
+                minijinja::Value::from(variable.value.text.to_string()),
+            )
+        })
+        .collect();
     Ok((input[body_start..].to_string(), values))
 }
 
@@ -176,6 +166,24 @@ mod tests {
 
         assert_eq!(values["base_url"].as_str(), Some("https://example.com"));
         assert_eq!(body, "GET {{base_url}} HTTP/1.1\n");
+    }
+
+    #[test]
+    fn parses_local_variables_with_interspersed_comment_lines() {
+        let input = "@id=old\n# @id=commented\n@id=new\n\nGET /{{id}} HTTP/1.1\n";
+        let (body, values) = parse_local_variables(input).unwrap();
+
+        assert_eq!(values["id"].as_str(), Some("new"));
+        assert_eq!(body, "GET /{{id}} HTTP/1.1\n");
+    }
+
+    #[test]
+    fn parses_declarations_after_leading_comments_and_blank_lines() {
+        let input = "# request settings\r\n\r\n@id = 42\r\nGET /{{id}} HTTP/1.1\r\n";
+        let (body, values) = parse_local_variables(input).unwrap();
+
+        assert_eq!(body, "GET /{{id}} HTTP/1.1\r\n");
+        assert_eq!(values["id"].as_str(), Some("42"));
     }
 
     #[test]

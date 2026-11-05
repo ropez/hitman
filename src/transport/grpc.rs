@@ -23,7 +23,7 @@ use tonic::{
     Request, Status,
 };
 
-use crate::{resolve::Resolved, util::truncate};
+use crate::{http_file, resolve::Resolved, util::truncate};
 
 const PROTO_HEADER: &str = "proto";
 const PROTOSET_HEADER: &str = "protoset";
@@ -66,23 +66,23 @@ impl Display for GrpcRequest {
 }
 
 pub fn is_grpc_request(rendered: &str) -> bool {
-    rendered
-        .lines()
-        .find(|line| !line.trim().is_empty())
-        .is_some_and(|line| line.trim_start().starts_with("GRPC "))
+    http_file::parse(rendered)
+        .request
+        .is_some_and(|request| request.line.method.text == "GRPC")
 }
 
 pub fn prepare_request(resolved: &Resolved, rendered: &str) -> Result<GrpcRequest> {
-    let (head, body) = split_head_body(rendered);
-    let mut lines = head.lines().filter(|line| !line.trim().is_empty());
-    let request_line = lines
-        .next()
+    let document = http_file::parse(rendered);
+    if let Some(error) = document.errors.first() {
+        bail!("{}", error.message);
+    }
+    let request = document
+        .request
         .context("Invalid gRPC request: missing request line")?;
-    let target = request_line
-        .trim()
-        .strip_prefix("GRPC")
-        .context("Invalid gRPC request: request must start with GRPC")?
-        .trim();
+    if request.line.method.text != "GRPC" {
+        bail!("Invalid gRPC request: request must start with GRPC");
+    }
+    let target = request.line.target.map_or("", |target| target.text);
 
     if target.is_empty() {
         bail!("Invalid gRPC request: missing target");
@@ -93,12 +93,9 @@ pub fn prepare_request(resolved: &Resolved, rendered: &str) -> Result<GrpcReques
     let mut descriptor_source = None;
     let mut metadata = Vec::new();
 
-    for line in lines {
-        let (key, value) = line
-            .split_once(':')
-            .with_context(|| format!("Invalid gRPC metadata line: {line}"))?;
-        let key = key.trim();
-        let value = value.trim();
+    for header in request.headers {
+        let key = header.name.text;
+        let value = header.value.text;
 
         if key.eq_ignore_ascii_case(PROTO_HEADER) {
             if descriptor_source.is_some() {
@@ -126,7 +123,9 @@ pub fn prepare_request(resolved: &Resolved, rendered: &str) -> Result<GrpcReques
         path,
         descriptor_source,
         metadata,
-        body: body.to_string(),
+        body: request
+            .body
+            .map_or_else(String::new, |body| body.text.to_string()),
     })
 }
 
@@ -246,16 +245,6 @@ pub fn print_request(req: &GrpcRequest) {
         for line in req.to_string().lines() {
             info!("> {}", truncate(line));
         }
-    }
-}
-
-fn split_head_body(input: &str) -> (&str, &str) {
-    if let Some((head, body)) = input.split_once("\r\n\r\n") {
-        (head, body)
-    } else if let Some((head, body)) = input.split_once("\n\n") {
-        (head, body)
-    } else {
-        (input, "")
     }
 }
 
@@ -569,7 +558,24 @@ mod tests {
     #[test]
     fn detects_grpc_request() {
         assert!(is_grpc_request("GRPC localhost:50051/foo.Bar/Baz\n"));
+        assert!(is_grpc_request(
+            "# @name Call Baz\n# note\nGRPC localhost:50051/foo.Bar/Baz\n"
+        ));
         assert!(!is_grpc_request("GET http://example.com\n"));
+    }
+
+    #[test]
+    fn parses_comments_in_grpc_head_but_not_body() {
+        let request = prepare_request(
+            &resolved("/tmp/project/call.http"),
+            "# @name Call Baz\nGRPC localhost:50051/foo.Bar/Baz\n# descriptors\nProto: ./baz.proto # note\n\n{\"text\":\"# unchanged\"}\n",
+        )
+        .unwrap();
+        assert_eq!(
+            request.descriptor_source,
+            DescriptorSource::Proto(PathBuf::from("/tmp/project/baz.proto"))
+        );
+        assert_eq!(request.body, "{\"text\":\"# unchanged\"}\n");
     }
 
     #[test]

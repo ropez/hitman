@@ -890,7 +890,6 @@ dependencies = [
  "fuzzy-matcher",
  "graphql-parser",
  "http",
- "httparse",
  "inquire",
  "jsonpath",
  "log",

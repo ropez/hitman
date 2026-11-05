@@ -11,7 +11,6 @@ repository = "https://github.com/ropez/hitman"
 chrono = "0.4.31"
 clap = { version = "4.4", features = ["derive"] }
 futures = "0.3"
-httparse = "1.8"
 inquire = { version = "0.9.4", features = ["date"] }
 jsonpath = "0.1"
 log = { version = "0.4.20", features = ["std"] }

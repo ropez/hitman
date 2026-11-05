@@ -9,6 +9,7 @@ use std::{
 use anyhow::{Context, Result};
 use hitman::{
     env::{get_target, load_env},
+    http_file,
     resolve::{find_root_dir, resolve_path, Resolved, ResolvedAs},
     scope::Replacement,
     transport::grpc::{
@@ -498,31 +499,44 @@ struct VariableOccurrence {
 struct VariableDefinition {
     location: Location,
     value: Option<TomlValue>,
+    array_entry: bool,
+}
+
+struct VariableResolution {
+    occurrence: VariableOccurrence,
+    declarations: Vec<VariableDefinition>,
+    active: Option<usize>,
+}
+
+impl VariableResolution {
+    fn active(&self) -> Option<&VariableDefinition> {
+        self.active.and_then(|index| self.declarations.get(index))
+    }
 }
 
 struct TomlKeyDefinition {
     range: Range,
     value: Option<TomlValue>,
+    array_entry: bool,
 }
 
 fn hover_for_position(uri: &Url, text: &str, position: Position) -> Result<Option<Hover>> {
-    let Some(occurrence) = variable_at_position(text, position) else {
+    let Some(resolution) = resolve_variable_at_position(uri, text, position)? else {
         return Ok(None);
     };
-    let definitions = variable_definitions(uri, &occurrence.key)?;
-    if definitions.len() != 1 {
-        return Ok(None);
-    }
-    let Some(value) = definitions.into_iter().next().and_then(|item| item.value) else {
+    let Some(value) = resolution
+        .active()
+        .and_then(|definition| definition.value.as_ref())
+    else {
         return Ok(None);
     };
 
     Ok(Some(Hover {
         contents: HoverContents::Scalar(MarkedString::String(format!(
             "`{}`",
-            toml_value_display(&value)
+            toml_value_display(value)
         ))),
-        range: Some(occurrence.range),
+        range: Some(resolution.occurrence.range),
     }))
 }
 
@@ -531,15 +545,26 @@ fn definition_for_position(
     text: &str,
     position: Position,
 ) -> Result<Option<Vec<Location>>> {
-    let Some(occurrence) = variable_at_position(text, position) else {
+    let Some(resolution) = resolve_variable_at_position(uri, text, position)? else {
         return Ok(None);
     };
-    let definitions = variable_definition_locations(uri, &occurrence.key)?;
-    if definitions.is_empty() {
+    let Some(active_index) = resolution.active else {
         return Ok(None);
+    };
+    let active = &resolution.declarations[active_index];
+    if !active.array_entry {
+        return Ok(Some(vec![active.location.clone()]));
     }
 
-    Ok(Some(definitions))
+    Ok(Some(
+        resolution.declarations[active_index..]
+            .iter()
+            .take_while(|definition| {
+                definition.array_entry && definition.location.uri == active.location.uri
+            })
+            .map(|definition| definition.location.clone())
+            .collect(),
+    ))
 }
 
 fn references_for_position(
@@ -548,7 +573,7 @@ fn references_for_position(
     position: Position,
     include_declaration: bool,
 ) -> Result<Option<Vec<Location>>> {
-    let Some(occurrence) = variable_at_position(text, position) else {
+    let Some(resolution) = resolve_variable_at_position(uri, text, position)? else {
         return Ok(None);
     };
     let path = uri_to_path(uri)?;
@@ -564,7 +589,7 @@ fn references_for_position(
         locations.extend(
             variable_occurrences(&file_text)
                 .into_iter()
-                .filter(|found| found.key == occurrence.key)
+                .filter(|found| found.key == resolution.occurrence.key)
                 .map(|found| Location {
                     uri: file_uri.clone(),
                     range: found.range,
@@ -573,7 +598,12 @@ fn references_for_position(
     }
 
     if include_declaration {
-        locations.extend(variable_definition_locations(uri, &occurrence.key)?);
+        locations.extend(
+            resolution
+                .declarations
+                .into_iter()
+                .map(|declaration| declaration.location),
+        );
     }
 
     locations.sort_by(|a, b| {
@@ -704,22 +734,28 @@ fn grpc_method_completion(
     text: &str,
     position: Position,
 ) -> Result<Option<CompletionResponse>> {
-    let Some(line) = text.lines().nth(position.line as usize) else {
+    let Some(request) = grpc_request(text) else {
         return Ok(None);
     };
-    let Some(target) = line.trim_start().strip_prefix("GRPC ") else {
+    let Some(target) = request.line.target else {
         return Ok(None);
     };
-    let target = target.trim_end();
-    let Some(slash) = target.rfind('/') else {
+    let (line_index, line) = line_at_offset(text, target.range.start);
+    if line_index != position.line as usize {
+        return Ok(None);
+    }
+    let Some(slash) = target.text.rfind('/') else {
         return Ok(None);
     };
-    let method = &target[slash + 1..];
+    let method = &target.text[slash + 1..];
     // A slash inside a template expression isn't a method separator.
     if method.contains(['{', '}', ' ']) {
         return Ok(None);
     }
-    let method_start = line.len() - line.trim_start().len() + "GRPC ".len() + slash + 1;
+    let line_start = text[..target.range.start]
+        .rfind('\n')
+        .map_or(0, |index| index + 1);
+    let method_start = target.range.start - line_start + slash + 1;
     let start = line[..method_start].encode_utf16().count() as u32;
     let end = start + method.encode_utf16().count() as u32;
     if position.character < start || position.character > end {
@@ -727,7 +763,7 @@ fn grpc_method_completion(
     }
 
     let path = uri_to_path(uri)?;
-    let base = diagnostic_template_value(&path, text, &target[..slash])?;
+    let base = diagnostic_template_value(&path, text, &target.text[..slash])?;
     let service_name = base.rsplit('/').next().unwrap_or_default();
     let source = descriptor_source(&path, text)?;
     let pool = load_descriptor_pool(&source)?;
@@ -1201,32 +1237,69 @@ fn position_to_byte_offset(text: &str, position: Position) -> usize {
     text.len()
 }
 
-fn variable_definition_locations(request_uri: &Url, key: &str) -> Result<Vec<Location>> {
-    Ok(variable_definitions(request_uri, key)?
-        .into_iter()
-        .map(|definition| definition.location)
-        .collect())
+fn resolve_variable_at_position(
+    uri: &Url,
+    text: &str,
+    position: Position,
+) -> Result<Option<VariableResolution>> {
+    let Some(occurrence) = variable_at_position(text, position) else {
+        return Ok(None);
+    };
+    let declarations = variable_definitions(uri, text, &occurrence.key)?;
+    // Declarations are collected in runtime precedence order. Local declarations
+    // come last, and the last local value wins when a name is declared twice.
+    let active = declarations.len().checked_sub(1).map(|last| {
+        if declarations[last].array_entry {
+            // An array of tables is one value spread across several headers.
+            // Navigate to its first header rather than treating the last entry
+            // as the only effective definition.
+            (0..=last)
+                .rev()
+                .take_while(|&index| {
+                    declarations[index].array_entry
+                        && declarations[index].location.uri == declarations[last].location.uri
+                })
+                .last()
+                .unwrap_or(last)
+        } else {
+            last
+        }
+    });
+    Ok(Some(VariableResolution {
+        occurrence,
+        declarations,
+        active,
+    }))
 }
 
-fn variable_definitions(request_uri: &Url, key: &str) -> Result<Vec<VariableDefinition>> {
+fn variable_definitions(
+    request_uri: &Url,
+    text: &str,
+    key: &str,
+) -> Result<Vec<VariableDefinition>> {
     let request_path = uri_to_path(request_uri)?;
     let resolved = resolve_path(&request_path)?;
     let target = get_target(&resolved.root_dir);
     let mut definitions = Vec::new();
 
+    let config = resolved.root_dir.join(CONFIG_FILE);
+    let local_config = resolved.root_dir.join(LOCAL_CONFIG_FILE);
+    let request_config = resolved.toml_path();
+    let data = resolved.root_dir.join(DATA_FILE);
+    // Match load_env: merged global config, then the selected target, then
+    // request config and data. Each later layer overrides earlier values.
     for (path, target) in [
-        (resolved.root_dir.join(CONFIG_FILE), Some(target.as_str())),
-        (
-            resolved.root_dir.join(LOCAL_CONFIG_FILE),
-            Some(target.as_str()),
-        ),
-        (resolved.toml_path(), None),
-        (resolved.root_dir.join(DATA_FILE), None),
+        (&config, None),
+        (&local_config, None),
+        (&config, Some(target.as_str())),
+        (&local_config, Some(target.as_str())),
+        (&request_config, None),
+        (&data, None),
     ] {
-        let Ok(text) = fs::read_to_string(&path) else {
+        let Ok(text) = fs::read_to_string(path) else {
             continue;
         };
-        let uri = Url::from_file_path(&path).map_err(|_| anyhow::anyhow!("Invalid file path"))?;
+        let uri = Url::from_file_path(path).map_err(|_| anyhow::anyhow!("Invalid file path"))?;
         definitions.extend(
             find_toml_key_definitions(&text, key, target)
                 .into_iter()
@@ -1236,71 +1309,55 @@ fn variable_definitions(request_uri: &Url, key: &str) -> Result<Vec<VariableDefi
                         range: definition.range,
                     },
                     value: definition.value,
+                    array_entry: definition.array_entry,
                 }),
         );
     }
 
     // Local variables are declared at the beginning of the .http file itself
     // (for example `@base_url = https://example.com`).
-    let request_text = fs::read_to_string(&request_path).unwrap_or_default();
     let request_uri =
         Url::from_file_path(&request_path).map_err(|_| anyhow::anyhow!("Invalid file path"))?;
     definitions.extend(
-        find_local_variable_definitions(&request_text, key)
+        http_file::parse(text)
+            .variables
             .into_iter()
-            .map(|definition| VariableDefinition {
+            .filter(|variable| variable.name.text == key)
+            .map(|variable| VariableDefinition {
                 location: Location {
                     uri: request_uri.clone(),
-                    range: definition.range,
+                    range: byte_range(text, variable.name.range),
                 },
-                value: definition.value,
+                value: Some(TomlValue::String(variable.value.text.to_string())),
+                array_entry: false,
             }),
     );
 
     Ok(definitions)
 }
 
-fn find_local_variable_definitions(text: &str, key: &str) -> Vec<TomlKeyDefinition> {
-    let mut definitions = Vec::new();
-    let mut declarations_started = false;
-    let mut offset = 0;
-
-    for line in text.split_inclusive('\n') {
-        let content = line.trim_end_matches(['\r', '\n']);
-        let declaration = content
-            .split_once('#')
-            .map_or(content, |(before, _)| before)
-            .trim_end();
-        if let Some(after_at) = declaration.strip_prefix('@') {
-            declarations_started = true;
-            if let Some((name, value)) = after_at.split_once('=') {
-                let name_start = 1 + after_at.len() - after_at.trim_start().len();
-                if name.trim() == key {
-                    let start = offset + name_start;
-                    let end = start + name.trim().len();
-                    definitions.push(TomlKeyDefinition {
-                        range: byte_range(text, start..end),
-                        value: Some(toml::Value::String(value.trim().to_string())),
-                    });
-                }
-            }
-        } else if declarations_started && content.trim().is_empty() {
-            // Blank separator lines are permitted before the request.
-        } else {
-            break;
-        }
-        offset += line.len();
-    }
-
-    definitions
+fn variable_at_position(text: &str, position: Position) -> Option<VariableOccurrence> {
+    variable_occurrences(text)
+        .into_iter()
+        .find(|occurrence| position_in_range(position, occurrence.range))
+        .or_else(|| {
+            http_file::parse(text)
+                .variables
+                .into_iter()
+                .find_map(|variable| {
+                    let range = byte_range(text, variable.name.range);
+                    position_in_range(position, range).then(|| VariableOccurrence {
+                        key: variable.name.text.to_string(),
+                        range,
+                    })
+                })
+        })
 }
 
-fn variable_at_position(text: &str, position: Position) -> Option<VariableOccurrence> {
-    variable_occurrences(text).into_iter().find(|occurrence| {
-        occurrence.range.start.line == position.line
-            && occurrence.range.start.character <= position.character
-            && position.character <= occurrence.range.end.character
-    })
+fn position_in_range(position: Position, range: Range) -> bool {
+    range.start.line == position.line
+        && range.start.character <= position.character
+        && position.character <= range.end.character
 }
 
 fn variable_occurrences(text: &str) -> Vec<VariableOccurrence> {
@@ -1363,32 +1420,40 @@ fn find_toml_key_definitions(
     };
     let root = document.as_table();
 
-    push_toml_value_definition(text, root, key, &mut definitions);
+    if target.is_none() {
+        push_toml_value_definition(text, root, key, &mut definitions);
 
-    if let Some(oauth) = root.get("_oauth").and_then(TomlEditItem::as_table) {
-        if let Some((profile_key, TomlEditItem::Table(_))) = oauth.get_key_value(key) {
-            if let Some(range) = profile_key.span().map(|span| byte_range(text, span)) {
-                definitions.push(TomlKeyDefinition { range, value: None });
+        if let Some(oauth) = root.get("_oauth").and_then(TomlEditItem::as_table) {
+            if let Some((profile_key, TomlEditItem::Table(_))) = oauth.get_key_value(key) {
+                if let Some(range) = profile_key.span().map(|span| byte_range(text, span)) {
+                    definitions.push(TomlKeyDefinition {
+                        range,
+                        value: None,
+                        array_entry: false,
+                    });
+                }
             }
         }
-    }
 
-    if let Some(table) = target
+        if let Some(TomlEditItem::ArrayOfTables(tables)) = root.get(key) {
+            for table in tables.iter() {
+                if let Some(range) = table
+                    .span()
+                    .and_then(|span| array_table_key_range(text, span, key))
+                {
+                    definitions.push(TomlKeyDefinition {
+                        range,
+                        value: None,
+                        array_entry: true,
+                    });
+                }
+            }
+        }
+    } else if let Some(table) = target
         .and_then(|target| root.get(target))
         .and_then(TomlEditItem::as_table)
     {
         push_toml_value_definition(text, table, key, &mut definitions);
-    }
-
-    if let Some(TomlEditItem::ArrayOfTables(tables)) = root.get(key) {
-        for table in tables.iter() {
-            if let Some(range) = table
-                .span()
-                .and_then(|span| array_table_key_range(text, span, key))
-            {
-                definitions.push(TomlKeyDefinition { range, value: None });
-            }
-        }
     }
 
     definitions
@@ -1413,6 +1478,7 @@ fn push_toml_value_definition(
     definitions.push(TomlKeyDefinition {
         range,
         value: parse_toml_edit_value(value),
+        array_entry: false,
     });
 }
 
@@ -1514,16 +1580,22 @@ fn set_grpc_method_edit(
         .into_iter()
         .find(|method| method.name() == method_name)
         .with_context(|| format!("gRPC method not found: {full_method}"))?;
-    let (line_index, line) = text
-        .lines()
-        .enumerate()
-        .find_map(|(i, line)| line.trim_start().starts_with("GRPC ").then_some((i, line)))
-        .context("Missing GRPC request line")?;
-    let new_line = replace_grpc_method(line, service_name, method_name)?;
+    let request = grpc_request(text).context("Missing GRPC request line")?;
+    let (line_index, line) = line_at_offset(text, request.line.method.range.start);
+    let target = request.line.target.context("Missing GRPC target")?;
+    let line_start = text[..target.range.start]
+        .rfind('\n')
+        .map_or(0, |index| index + 1);
+    let new_line = format!(
+        "{}{}{}",
+        &line[..target.range.start - line_start],
+        replace_grpc_target_method(target.text, service_name, method_name),
+        &line[target.range.end - line_start..]
+    );
     let method_edit = TextEdit {
         range: Range {
             start: Position::new(line_index as u32, 0),
-            end: Position::new(line_index as u32, line.len() as u32),
+            end: Position::new(line_index as u32, line.encode_utf16().count() as u32),
         },
         new_text: new_line,
     };
@@ -1545,14 +1617,7 @@ fn set_grpc_method_edit(
     })
 }
 
-fn replace_grpc_method(line: &str, service_name: &str, method_name: &str) -> Result<String> {
-    let prefix_len = line
-        .find("GRPC ")
-        .map(|index| index + "GRPC ".len())
-        .context("Missing GRPC request line")?;
-    let prefix = &line[..prefix_len];
-    let target = line[prefix_len..].trim_end();
-    let trailing = &line[prefix_len + target.len()..];
+fn replace_grpc_target_method(target: &str, service_name: &str, method_name: &str) -> String {
     let target = if let Some((base, current)) = target.rsplit_once('/') {
         if current.is_empty() || current.contains('}') || current == service_name {
             format!("{target}/{method_name}")
@@ -1563,7 +1628,7 @@ fn replace_grpc_method(line: &str, service_name: &str, method_name: &str) -> Res
         format!("{target}/{method_name}")
     };
 
-    Ok(format!("{prefix}{target}{trailing}"))
+    target
 }
 
 fn diagnostic_for_line(line_index: usize, line: &str, message: String) -> Diagnostic {
@@ -1580,12 +1645,10 @@ fn diagnostic_for_line(line_index: usize, line: &str, message: String) -> Diagno
 }
 
 fn diagnostics_for_document(uri: &Url, text: &str) -> Vec<Diagnostic> {
-    let Some((request_index, request_line)) = text.lines().enumerate().find(|(_, line)| {
-        let line = line.trim_start();
-        line == "GRPC" || line.starts_with("GRPC ")
-    }) else {
+    let Some(request) = grpc_request(text) else {
         return Vec::new();
     };
+    let (request_index, request_line) = line_at_offset(text, request.line.method.range.start);
     let mut diagnostics = Vec::new();
     let path = match uri_to_path(uri) {
         Ok(path) => path,
@@ -1594,11 +1657,11 @@ fn diagnostics_for_document(uri: &Url, text: &str) -> Vec<Diagnostic> {
     let target = diagnostic_template_value(
         &path,
         text,
-        request_line
-            .trim_start()
-            .strip_prefix("GRPC")
-            .unwrap()
-            .trim(),
+        request
+            .line
+            .target
+            .as_ref()
+            .map_or("", |target| target.text),
     );
     if let Err(err) = &target {
         diagnostics.push(diagnostic_for_line(
@@ -1608,18 +1671,11 @@ fn diagnostics_for_document(uri: &Url, text: &str) -> Vec<Diagnostic> {
         ));
     }
 
-    let mut headers =
-        text.lines()
-            .enumerate()
-            .skip(request_index + 1)
-            .take_while(|(_, line)| !line.trim().is_empty())
-            .filter_map(|(index, line)| {
-                let (key, value) = line.split_once(':')?;
-                let key = key.trim();
-                (key.eq_ignore_ascii_case("proto") || key.eq_ignore_ascii_case("protoset"))
-                    .then_some((index, line, key, value.trim()))
-            });
-    let Some((index, line, key, value)) = headers.next() else {
+    let mut headers = request.headers.iter().filter(|header| {
+        header.name.text.eq_ignore_ascii_case("proto")
+            || header.name.text.eq_ignore_ascii_case("protoset")
+    });
+    let Some(header) = headers.next() else {
         diagnostics.push(diagnostic_for_line(
             request_index,
             request_line,
@@ -1627,7 +1683,8 @@ fn diagnostics_for_document(uri: &Url, text: &str) -> Vec<Diagnostic> {
         ));
         return diagnostics;
     };
-    if let Some((index, line, _, _)) = headers.next() {
+    if let Some(duplicate) = headers.next() {
+        let (index, line) = line_at_offset(text, duplicate.name.range.start);
         diagnostics.push(diagnostic_for_line(
             index,
             line,
@@ -1635,6 +1692,9 @@ fn diagnostics_for_document(uri: &Url, text: &str) -> Vec<Diagnostic> {
         ));
         return diagnostics;
     }
+    let (index, line) = line_at_offset(text, header.name.range.start);
+    let key = header.name.text;
+    let value = header.value.text;
 
     let pool = (|| {
         let value = diagnostic_template_value(&path, text, value)?;
@@ -1682,18 +1742,19 @@ fn diagnostic_template_value(file_path: &Path, text: &str, value: &str) -> Resul
     let mut environment = minijinja::Environment::new();
     environment.set_undefined_behavior(minijinja::UndefinedBehavior::Strict);
     let mut rendered = value.to_string();
+    let local_variables = http_file::parse(text).variables;
     for _ in 0..32 {
         if !rendered.contains("{{") && !rendered.contains("{%") {
             return Ok(rendered);
         }
         let mut values = HashMap::new();
         for occurrence in variable_occurrences(&rendered) {
-            let local = find_local_variable_definitions(text, &occurrence.key)
-                .into_iter()
-                .last()
-                .and_then(|definition| definition.value);
+            let local = local_variables
+                .iter()
+                .rev()
+                .find(|variable| variable.name.text == occurrence.key);
             let replacement = if let Some(local) = local {
-                toml_value_display(&local)
+                local.value.text.to_string()
             } else {
                 match scope.lookup(&occurrence.key)? {
                     Replacement::Value(value) => value,
@@ -1732,15 +1793,14 @@ fn validate_grpc_target(pool: &prost_reflect::DescriptorPool, target: &str) -> R
 }
 
 fn descriptor_source(file_path: &Path, text: &str) -> Result<DescriptorSource> {
-    for line in text.lines() {
-        let Some((key, value)) = line.split_once(':') else {
-            continue;
-        };
-        let value = value.trim();
-        if key.trim().eq_ignore_ascii_case("proto") {
+    let request = grpc_request(text).context("Missing GRPC request line")?;
+    for header in request.headers {
+        let key = header.name.text;
+        let value = header.value.text;
+        if key.eq_ignore_ascii_case("proto") {
             return Ok(DescriptorSource::Proto(resolve_relative(file_path, value)));
         }
-        if key.trim().eq_ignore_ascii_case("protoset") {
+        if key.eq_ignore_ascii_case("protoset") {
             return Ok(DescriptorSource::Protoset(resolve_relative(
                 file_path, value,
             )));
@@ -1766,10 +1826,31 @@ fn proto_service(file_path: &Path, text: &str, source: &DescriptorSource) -> Res
 }
 
 fn grpc_target(text: &str) -> Option<String> {
-    text.lines()
-        .find_map(|line| line.trim_start().strip_prefix("GRPC "))
-        .map(str::trim)
-        .map(str::to_string)
+    grpc_request(text)?
+        .line
+        .target
+        .map(|target| target.text.to_string())
+}
+
+fn grpc_request(text: &str) -> Option<http_file::Request<'_>> {
+    http_file::parse(text)
+        .request
+        .filter(|request| request.line.method.text == "GRPC")
+}
+
+fn line_at_offset(text: &str, offset: usize) -> (usize, &str) {
+    let line_start = text[..offset].rfind('\n').map_or(0, |index| index + 1);
+    let line_end = text[offset..]
+        .find('\n')
+        .map_or(text.len(), |index| offset + index);
+    let line = text[line_start..line_end].trim_end_matches('\r');
+    (
+        text[..line_start]
+            .bytes()
+            .filter(|byte| *byte == b'\n')
+            .count(),
+        line,
+    )
 }
 
 fn grpc_method_name(text: &str) -> Option<String> {
@@ -1851,6 +1932,192 @@ mod tests {
     use mktemp::Temp;
     use prost::Message;
     use std::fs;
+    use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader, DuplexStream};
+
+    struct LspTestClient {
+        reader: BufReader<DuplexStream>,
+        writer: DuplexStream,
+        server: tokio::task::JoinHandle<()>,
+        next_id: u64,
+        applied_edit: Option<serde_json::Value>,
+    }
+
+    impl Drop for LspTestClient {
+        fn drop(&mut self) {
+            self.server.abort();
+        }
+    }
+
+    impl LspTestClient {
+        async fn start() -> Self {
+            let (server_input, client_output) = tokio::io::duplex(64 * 1024);
+            let (client_input, server_output) = tokio::io::duplex(64 * 1024);
+            let (service, socket) = LspService::new(|client| Backend {
+                client,
+                documents: Arc::new(Mutex::new(HashMap::new())),
+            });
+            let server = tokio::spawn(async move {
+                Server::new(server_input, server_output, socket)
+                    .serve(service)
+                    .await;
+            });
+            let mut client = Self {
+                reader: BufReader::new(client_input),
+                writer: client_output,
+                server,
+                next_id: 1,
+                applied_edit: None,
+            };
+            client
+                .request(
+                    "initialize",
+                    serde_json::json!({
+                        "processId": null,
+                        "rootUri": null,
+                        "capabilities": {}
+                    }),
+                )
+                .await;
+            client.notify("initialized", serde_json::json!({})).await;
+            client
+        }
+
+        async fn send(&mut self, message: serde_json::Value) {
+            let body = serde_json::to_vec(&message).unwrap();
+            self.writer
+                .write_all(format!("Content-Length: {}\r\n\r\n", body.len()).as_bytes())
+                .await
+                .unwrap();
+            self.writer.write_all(&body).await.unwrap();
+        }
+
+        async fn read(&mut self) -> serde_json::Value {
+            tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                let mut length = None;
+                loop {
+                    let mut header = String::new();
+                    assert!(self.reader.read_line(&mut header).await.unwrap() > 0);
+                    if header == "\r\n" {
+                        break;
+                    }
+                    if let Some(value) = header.strip_prefix("Content-Length: ") {
+                        length = Some(value.trim().parse::<usize>().unwrap());
+                    }
+                }
+                let mut body = vec![0; length.expect("Content-Length header")];
+                self.reader.read_exact(&mut body).await.unwrap();
+                serde_json::from_slice(&body).unwrap()
+            })
+            .await
+            .expect("LSP response timed out")
+        }
+
+        async fn request(&mut self, method: &str, params: serde_json::Value) -> serde_json::Value {
+            let id = self.next_id;
+            self.next_id += 1;
+            self.send(serde_json::json!({
+                "jsonrpc": "2.0", "id": id, "method": method, "params": params
+            }))
+            .await;
+            loop {
+                let message = self.read().await;
+                if message["method"] == "workspace/applyEdit" {
+                    self.applied_edit = Some(message["params"]["edit"].clone());
+                    self.send(serde_json::json!({
+                        "jsonrpc": "2.0", "id": message["id"], "result": {"applied": true}
+                    }))
+                    .await;
+                    continue;
+                }
+                if message.get("id") == Some(&serde_json::json!(id)) {
+                    assert!(message.get("error").is_none(), "{message}");
+                    return message["result"].clone();
+                }
+            }
+        }
+
+        async fn notify(&mut self, method: &str, params: serde_json::Value) {
+            self.send(serde_json::json!({
+                "jsonrpc": "2.0", "method": method, "params": params
+            }))
+            .await;
+        }
+
+        async fn open(&mut self, uri: &Url, text: &str) -> serde_json::Value {
+            self.notify(
+                "textDocument/didOpen",
+                serde_json::json!({
+                    "textDocument": {"uri": uri, "languageId": "http", "version": 1, "text": text}
+                }),
+            )
+            .await;
+            // didOpen has no response; diagnostics confirm the document is ready.
+            loop {
+                let message = self.read().await;
+                if message["method"] == "textDocument/publishDiagnostics"
+                    && message["params"]["uri"] == serde_json::json!(uri)
+                {
+                    return message["params"].clone();
+                }
+            }
+        }
+
+        async fn change(&mut self, uri: &Url, text: &str) -> serde_json::Value {
+            self.notify(
+                "textDocument/didChange",
+                serde_json::json!({
+                    "textDocument": {"uri": uri, "version": 2},
+                    "contentChanges": [{"text": text}]
+                }),
+            )
+            .await;
+            loop {
+                let message = self.read().await;
+                if message["method"] == "textDocument/publishDiagnostics"
+                    && message["params"]["uri"] == serde_json::json!(uri)
+                    && message["params"]["version"] == 2
+                {
+                    return message["params"].clone();
+                }
+            }
+        }
+
+        async fn at(
+            &mut self,
+            method: &str,
+            uri: &Url,
+            line: u32,
+            character: u32,
+        ) -> serde_json::Value {
+            self.request(
+                method,
+                serde_json::json!({
+                "textDocument": {"uri": uri},
+                "position": {"line": line, "character": character},
+                "context": {"includeDeclaration": true, "triggerKind": 1}
+                }),
+            )
+            .await
+        }
+
+        async fn references(
+            &mut self,
+            uri: &Url,
+            line: u32,
+            character: u32,
+            include_declaration: bool,
+        ) -> serde_json::Value {
+            self.request(
+                "textDocument/references",
+                serde_json::json!({
+                    "textDocument": {"uri": uri},
+                    "position": {"line": line, "character": character},
+                    "context": {"includeDeclaration": include_declaration}
+                }),
+            )
+            .await
+        }
+    }
 
     fn grpc_fixture() -> (Temp, PathBuf, String) {
         let tmp = Temp::new_dir().unwrap();
@@ -1880,249 +2147,18 @@ mod tests {
         fs::write(tmp.join("protoset.bin"), descriptors.encode_to_vec()).unwrap();
 
         let request = tmp.join("sum.http");
-        let text =
-            "GRPC grpcb.in:9001/addsvc.Add/Sum\nProtoset: ./protoset.bin\n\n{}\n".to_string();
+        let text = r#"
+GRPC grpcb.in:9001/addsvc.Add/Sum
+Protoset: ./protoset.bin
+
+{}
+"#
+        .strip_prefix('\n')
+        .unwrap()
+        .to_string();
         fs::write(&request, &text).unwrap();
 
         (tmp, request, text)
-    }
-
-    #[test]
-    fn completes_grpc_methods_without_a_body() {
-        let (_tmp, request, _) = grpc_fixture();
-        let uri = Url::from_file_path(request).unwrap();
-        for header in ["Protoset: ./protoset.bin", "Proto: ./add.proto"] {
-            let line = "GRPC localhost:50051/addsvc.Add/";
-            let text = format!("{line}\n{header}\n");
-            let completion =
-                completion_for_position(&uri, &text, Position::new(0, line.len() as u32))
-                    .unwrap()
-                    .unwrap();
-            let CompletionResponse::Array(items) = completion else {
-                panic!("expected method completions");
-            };
-            assert_eq!(
-                items
-                    .iter()
-                    .map(|item| item.label.as_str())
-                    .collect::<Vec<_>>(),
-                vec!["Sum", "Concat"]
-            );
-            assert!(items
-                .iter()
-                .all(|item| item.kind == Some(CompletionItemKind::METHOD)));
-        }
-    }
-
-    #[test]
-    fn method_completion_replaces_entire_partial_or_invalid_method() {
-        let (_tmp, request, text) = grpc_fixture();
-        let uri = Url::from_file_path(request).unwrap();
-        for name in ["Su", "UnknownMethod", "Sum"] {
-            let text = text.replace("/Sum", &format!("/{name}"));
-            let line = text.lines().next().unwrap();
-            let start = line.rfind('/').unwrap() + 1;
-            // Complete with the cursor in the middle, replacing the suffix too.
-            let completion =
-                completion_for_position(&uri, &text, Position::new(0, start as u32 + 1))
-                    .unwrap()
-                    .unwrap();
-            let CompletionResponse::Array(items) = completion else {
-                panic!("expected method completions");
-            };
-            let item = items.iter().find(|item| item.label == "Concat").unwrap();
-            let Some(CompletionTextEdit::Edit(edit)) = &item.text_edit else {
-                panic!("expected method edit");
-            };
-            assert_eq!(
-                edit.range,
-                Range::new(
-                    Position::new(0, start as u32),
-                    Position::new(0, line.len() as u32)
-                )
-            );
-            assert_eq!(edit.new_text, "Concat");
-            assert!(item.command.is_none());
-            assert!(item.additional_text_edits.is_none());
-        }
-    }
-
-    #[test]
-    fn completes_grpc_methods_with_config_and_unsaved_local_variables() {
-        let (tmp, request, _) = grpc_fixture();
-        fs::write(
-            tmp.join("hitman.toml"),
-            "[default]\nservice_url = 'https://localhost:50051/addsvc.Add'\n",
-        )
-        .unwrap();
-        let uri = Url::from_file_path(request).unwrap();
-        for prefix in ["", "@service_url = grpcs://localhost:50051/addsvc.Add\n\n"] {
-            let line = "GRPC {{service_url}}/";
-            let text = format!("{prefix}{line}\nProtoset: ./protoset.bin\n\n{{}}\n");
-            let line_index = prefix.lines().count() as u32;
-            let completion =
-                completion_for_position(&uri, &text, Position::new(line_index, line.len() as u32))
-                    .unwrap()
-                    .unwrap();
-            let CompletionResponse::Array(items) = completion else {
-                panic!("expected method completions");
-            };
-            assert_eq!(items.len(), 2);
-        }
-    }
-
-    #[test]
-    fn method_completion_ignores_host_service_and_header_positions() {
-        let (_tmp, request, text) = grpc_fixture();
-        let uri = Url::from_file_path(request).unwrap();
-        for position in [
-            Position::new(0, 10),
-            Position::new(0, 23),
-            Position::new(1, 10),
-        ] {
-            assert!(completion_for_position(&uri, &text, position)
-                .unwrap()
-                .is_none());
-        }
-        let text = text.replace("addsvc.Add", "missing.Service");
-        assert!(completion_for_position(
-            &uri,
-            &text,
-            Position::new(0, text.lines().next().unwrap().len() as u32)
-        )
-        .unwrap()
-        .is_none());
-    }
-
-    #[test]
-    fn grpc_diagnostics_accept_valid_descriptors_and_methods() {
-        let (_tmp, request, text) = grpc_fixture();
-        let uri = Url::from_file_path(request).unwrap();
-        assert!(diagnostics_for_document(&uri, &text).is_empty());
-        assert!(diagnostics_for_document(
-            &uri,
-            &text.replace("Protoset: ./protoset.bin", "Proto: ./add.proto")
-        )
-        .is_empty());
-    }
-
-    #[test]
-    fn grpc_diagnostics_report_unknown_method_and_service_on_request_line() {
-        let (_tmp, request, text) = grpc_fixture();
-        let uri = Url::from_file_path(request).unwrap();
-        for (text, message) in [
-            (
-                text.replace("/Sum", "/UnknownMethod"),
-                "gRPC method not found: addsvc.Add/UnknownMethod",
-            ),
-            (
-                text.replace("addsvc.Add", "missing.Service"),
-                "gRPC service not found: missing.Service",
-            ),
-            (
-                text.replace("/addsvc.Add/Sum", "/UnknownMethod"),
-                "Invalid gRPC path",
-            ),
-        ] {
-            let diagnostics = diagnostics_for_document(&uri, &text);
-            assert_eq!(diagnostics.len(), 1);
-            assert_eq!(diagnostics[0].range.start.line, 0);
-            assert_eq!(diagnostics[0].severity, Some(DiagnosticSeverity::ERROR));
-            assert!(
-                diagnostics[0].message.contains(message),
-                "{}",
-                diagnostics[0].message
-            );
-        }
-    }
-
-    #[test]
-    fn grpc_diagnostics_resolve_target_variables_from_config_and_unsaved_locals() {
-        let (tmp, request, text) = grpc_fixture();
-        fs::write(
-            tmp.join("hitman.toml"),
-            "[default]\nservice_url = 'localhost:50051/addsvc.Add'\n",
-        )
-        .unwrap();
-        let uri = Url::from_file_path(request).unwrap();
-        let text = text.replace("grpcb.in:9001/addsvc.Add", "{{service_url}}");
-        assert!(diagnostics_for_document(&uri, &text).is_empty());
-        let diagnostics = diagnostics_for_document(&uri, &text.replace("/Sum", "/UnknownMethod"));
-        assert_eq!(diagnostics.len(), 1);
-        assert!(diagnostics[0].message.contains("gRPC method not found"));
-        let text = format!("@service_url = localhost:50051/addsvc.Add\n\n{text}");
-        fs::remove_file(tmp.join("hitman.toml")).unwrap();
-        assert!(diagnostics_for_document(&uri, &text).is_empty());
-    }
-
-    #[test]
-    fn grpc_diagnostics_report_missing_variables_and_invalid_descriptors_independently() {
-        let (tmp, request, text) = grpc_fixture();
-        let uri = Url::from_file_path(request).unwrap();
-        fs::write(tmp.join("protoset.bin"), "not a descriptor set").unwrap();
-        let text = text.replace("grpcb.in:9001/addsvc.Add", "{{service_url}}");
-        let diagnostics = diagnostics_for_document(&uri, &text);
-        assert_eq!(diagnostics.len(), 2);
-        assert_eq!(diagnostics[0].range.start.line, 0);
-        assert!(diagnostics[0]
-            .message
-            .contains("No value found for {{service_url}}"));
-        assert_eq!(diagnostics[1].range.start.line, 1);
-        assert!(diagnostics[1]
-            .message
-            .contains("Invalid Protoset descriptors"));
-    }
-
-    #[test]
-    fn grpc_diagnostics_report_invalid_missing_and_duplicate_descriptor_headers() {
-        let (tmp, request, text) = grpc_fixture();
-        let uri = Url::from_file_path(request).unwrap();
-        fs::write(tmp.join("broken.proto"), "invalid proto").unwrap();
-        for header in [
-            "Proto: broken.proto",
-            "Protoset: missing.bin",
-            "Protoset:",
-            "Protoset: {{missing}}",
-        ] {
-            let diagnostics =
-                diagnostics_for_document(&uri, &text.replace("Protoset: ./protoset.bin", header));
-            assert_eq!(diagnostics.len(), 1, "{header}");
-            assert_eq!(diagnostics[0].range.start.line, 1);
-        }
-        let diagnostics =
-            diagnostics_for_document(&uri, "GRPC localhost:50051/addsvc.Add/Sum\n\n{}");
-        assert_eq!(diagnostics.len(), 1);
-        assert_eq!(diagnostics[0].message, "Missing Proto or Protoset header");
-        let diagnostics = diagnostics_for_document(
-            &uri,
-            &text.replace(
-                "Protoset: ./protoset.bin",
-                "Protoset: ./protoset.bin\nProto: add.proto",
-            ),
-        );
-        assert_eq!(diagnostics.len(), 1);
-        assert_eq!(diagnostics[0].range.start.line, 2);
-    }
-
-    #[test]
-    fn grpc_diagnostics_clear_after_fix_and_ignore_http_requests() {
-        let (_tmp, request, text) = grpc_fixture();
-        let uri = Url::from_file_path(request).unwrap();
-        assert!(!diagnostics_for_document(&uri, &text.replace("/Sum", "/Missing")).is_empty());
-        assert!(diagnostics_for_document(&uri, &text).is_empty());
-        assert!(diagnostics_for_document(&uri, "GET {{url}}\n\n{}").is_empty());
-    }
-
-    #[test]
-    fn grpc_diagnostics_resolve_nested_variables_and_bound_cycles() {
-        let (tmp, request, text) = grpc_fixture();
-        fs::write(tmp.join("hitman.toml"), "[default]\nhost = 'localhost:50051'\nservice_url = '{{host}}/addsvc.Add'\ncycle = '{{cycle}}'\n").unwrap();
-        let uri = Url::from_file_path(request).unwrap();
-        let text = text.replace("grpcb.in:9001/addsvc.Add", "{{service_url}}");
-        assert!(diagnostics_for_document(&uri, &text).is_empty());
-        let diagnostics = diagnostics_for_document(&uri, &text.replace("service_url", "cycle"));
-        assert_eq!(diagnostics.len(), 1);
-        assert!(diagnostics[0].message.contains("cyclic variable reference"));
     }
 
     fn grpc_completion_fixture(body: &str) -> (Temp, PathBuf, String) {
@@ -2164,8 +2200,15 @@ mod tests {
 
         let request = tmp.join("create.http");
         let text = format!(
-            "GRPC localhost:50051/orders.Orders/Create\nProtoset: ./protoset.bin\n\n{body}"
-        );
+            r#"
+GRPC localhost:50051/orders.Orders/Create
+Protoset: ./protoset.bin
+
+{body}"#
+        )
+        .strip_prefix('\n')
+        .unwrap()
+        .to_string();
         fs::write(&request, &text).unwrap();
 
         (tmp, request, text)
@@ -2209,819 +2252,682 @@ mod tests {
         fs::write(tmp.join("protoset.bin"), descriptors.encode_to_vec()).unwrap();
 
         let request = tmp.join("adopt.http");
-        let text = "GRPC localhost:50051/petstore.Pets/Adopt\nProtoset: ./protoset.bin\n\n{}\n"
-            .to_string();
+        let text = r#"
+GRPC localhost:50051/petstore.Pets/Adopt
+Protoset: ./protoset.bin
+
+{}
+"#
+        .strip_prefix('\n')
+        .unwrap()
+        .to_string();
         fs::write(&request, &text).unwrap();
 
         (tmp, request, text)
     }
 
-    fn variable_fixture() -> (Temp, PathBuf, String) {
+    async fn open_request(tmp: &Temp, text: &str) -> (Url, LspTestClient) {
+        let request = tmp.join("request.http");
+        fs::write(&request, text).unwrap();
+        let uri = Url::from_file_path(request).unwrap();
+        let mut client = LspTestClient::start().await;
+        client.open(&uri, text).await;
+        (uri, client)
+    }
+
+    #[tokio::test]
+    async fn lsp_hover_shows_effective_config_value() {
+        let tmp = Temp::new_dir().unwrap();
+        fs::write(tmp.join("hitman.toml"), r#"url = "global""#).unwrap();
+        fs::write(tmp.join("hitman.local.toml"), r#"url = "local""#).unwrap();
+        let (uri, mut client) = open_request(&tmp, "GET {{url}}").await;
+
+        let hover = client.at("textDocument/hover", &uri, 0, 7).await;
+        assert_eq!(hover["contents"], "`local`");
+    }
+
+    #[tokio::test]
+    async fn lsp_definition_navigates_to_effective_config_declaration() {
+        let tmp = Temp::new_dir().unwrap();
+        fs::write(tmp.join("hitman.toml"), r#"url = "global""#).unwrap();
+        fs::write(tmp.join("hitman.local.toml"), r#"url = "local""#).unwrap();
+        let (uri, mut client) = open_request(&tmp, "GET {{url}}").await;
+
+        let definition = client.at("textDocument/definition", &uri, 0, 7).await;
+        assert_eq!(definition.as_array().unwrap().len(), 1);
+        assert_eq!(
+            definition[0]["uri"],
+            serde_json::json!(Url::from_file_path(tmp.join("hitman.local.toml")).unwrap())
+        );
+        assert_eq!(
+            definition[0]["range"]["start"],
+            serde_json::json!({"line": 0, "character": 0})
+        );
+    }
+
+    #[tokio::test]
+    async fn lsp_references_include_all_config_declarations() {
+        let tmp = Temp::new_dir().unwrap();
+        fs::write(tmp.join("hitman.toml"), r#"url = "global""#).unwrap();
+        fs::write(tmp.join("hitman.local.toml"), r#"url = "local""#).unwrap();
+        let (uri, mut client) = open_request(&tmp, "GET {{url}}").await;
+
+        let references = client.references(&uri, 0, 7, true).await;
+        for file in ["hitman.toml", "hitman.local.toml"] {
+            assert!(references.as_array().unwrap().iter().any(|reference| {
+                reference["uri"] == serde_json::json!(Url::from_file_path(tmp.join(file)).unwrap())
+                    && reference["range"]["start"] == serde_json::json!({"line": 0, "character": 0})
+            }));
+        }
+    }
+
+    #[tokio::test]
+    async fn lsp_references_without_declarations_include_graphql_uses() {
+        let tmp = Temp::new_dir().unwrap();
+        fs::write(tmp.join("hitman.toml"), r#"url = "global""#).unwrap();
+        fs::write(
+            tmp.join("query.graphql"),
+            r#"query { field(arg: "{{url}}") }"#,
+        )
+        .unwrap();
+        let (uri, mut client) = open_request(&tmp, "GET {{url}}").await;
+
+        let uses = client.references(&uri, 0, 7, false).await;
+        let uses = uses.as_array().unwrap();
+
+        assert!(uses
+            .iter()
+            .any(|reference| { reference["uri"] == serde_json::json!(uri) }));
+        assert!(uses.iter().any(|reference| reference["uri"]
+            == serde_json::json!(Url::from_file_path(tmp.join("query.graphql")).unwrap())));
+        assert!(uses.iter().all(|reference| reference["uri"]
+            != serde_json::json!(Url::from_file_path(tmp.join("hitman.toml")).unwrap())));
+    }
+
+    #[tokio::test]
+    async fn lsp_definition_prefers_data_over_config() {
+        let tmp = Temp::new_dir().unwrap();
+        fs::write(tmp.join("hitman.toml"), "token = 'config'").unwrap();
+        fs::write(tmp.join(".hitman-data.toml"), "token = 'data'").unwrap();
+        let (uri, mut client) = open_request(&tmp, "GET {{token}}").await;
+
+        let definition = client.at("textDocument/definition", &uri, 0, 8).await;
+        assert_eq!(
+            definition[0]["uri"],
+            serde_json::json!(Url::from_file_path(tmp.join(".hitman-data.toml")).unwrap())
+        );
+    }
+
+    #[tokio::test]
+    async fn lsp_hover_shows_selected_target_only_value() {
         let tmp = Temp::new_dir().unwrap();
         fs::write(
             tmp.join("hitman.toml"),
-            "url = \"global\"\ntoken = \"config-token\"\n\n[dev]\nurl = \"dev\"\nbase_url = \"https://dev.example.com\"\ntarget_only = \"dev-only\"\n\n[alternative]\nbase_url = \"https://alternative.example.com\"\n\n[[label]]\nvalue = \"bug\"\nname = \"bug\"\n\n[[label]]\nvalue = \"documentation\"\nname = \"documentation\"\n",
+            r#"[dev]
+target_only = "dev-only"
+"#,
+        )
+        .unwrap();
+        fs::write(tmp.join(".hitman-target"), "dev").unwrap();
+        let (uri, mut client) = open_request(&tmp, "GET {{target_only}}").await;
+
+        let hover = client.at("textDocument/hover", &uri, 0, 8).await;
+        assert_eq!(hover["contents"], "`dev-only`");
+    }
+
+    async fn open_unsaved_local_fixture() -> (Temp, Url, LspTestClient) {
+        let tmp = Temp::new_dir().unwrap();
+        fs::write(
+            tmp.join("hitman.toml"),
+            r#"base_url = 'config'
+"#,
+        )
+        .unwrap();
+        let request = tmp.join("request.http");
+        fs::write(
+            &request,
+            r#"GET {{base_url}}
+"#,
+        )
+        .unwrap();
+        let uri = Url::from_file_path(request).unwrap();
+        let mut client = LspTestClient::start().await;
+        let text = r#"@base_url = local # note
+
+GET {{base_url}}
+"#;
+        client.open(&uri, text).await;
+        (tmp, uri, client)
+    }
+
+    #[tokio::test]
+    async fn lsp_hover_reads_unsaved_local_value() {
+        let (_tmp, uri, mut client) = open_unsaved_local_fixture().await;
+        assert_eq!(
+            client.at("textDocument/hover", &uri, 2, 8).await["contents"],
+            "`local`"
+        );
+    }
+
+    #[tokio::test]
+    async fn lsp_definition_navigates_to_unsaved_local_declaration() {
+        let (_tmp, uri, mut client) = open_unsaved_local_fixture().await;
+        assert_eq!(
+            client.at("textDocument/definition", &uri, 2, 8).await[0]["range"]["start"],
+            serde_json::json!({"line": 0, "character": 1})
+        );
+    }
+
+    #[tokio::test]
+    async fn lsp_hover_works_on_local_declaration() {
+        let (_tmp, uri, mut client) = open_unsaved_local_fixture().await;
+        assert_eq!(
+            client.at("textDocument/hover", &uri, 0, 3).await["contents"],
+            "`local`"
+        );
+    }
+
+    #[tokio::test]
+    async fn lsp_references_include_overridden_config_declaration() {
+        let (tmp, uri, mut client) = open_unsaved_local_fixture().await;
+        let refs = client.references(&uri, 2, 8, true).await;
+        assert!(refs
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|reference| reference["uri"]
+                == serde_json::json!(Url::from_file_path(tmp.join("hitman.toml")).unwrap())));
+    }
+
+    #[tokio::test]
+    async fn lsp_hover_updates_after_document_change() {
+        let (_tmp, uri, mut client) = open_unsaved_local_fixture().await;
+        client
+            .change(
+                &uri,
+                r#"@base_url = updated
+
+GET {{base_url}}
+"#,
+            )
+            .await;
+        assert_eq!(
+            client.at("textDocument/hover", &uri, 2, 8).await["contents"],
+            "`updated`"
+        );
+    }
+
+    #[tokio::test]
+    async fn lsp_hover_is_null_outside_a_variable() {
+        let (_tmp, uri, mut client) = open_unsaved_local_fixture().await;
+        assert_eq!(
+            client.at("textDocument/hover", &uri, 2, 0).await,
+            serde_json::Value::Null
+        );
+    }
+
+    #[tokio::test]
+    async fn lsp_hover_uses_last_local_declaration() {
+        let tmp = Temp::new_dir().unwrap();
+        let text = r#"
+@id = old
+@id = new
+
+GET /{{id}}
+"#;
+        let (uri, mut client) = open_request(&tmp, text).await;
+
+        assert_eq!(
+            client.at("textDocument/hover", &uri, 4, 8).await["contents"],
+            "`new`"
+        );
+    }
+
+    #[tokio::test]
+    async fn lsp_definition_uses_last_local_declaration() {
+        let tmp = Temp::new_dir().unwrap();
+        let text = r#"
+@id = old
+@id = new
+
+GET /{{id}}
+"#;
+        let (uri, mut client) = open_request(&tmp, text).await;
+
+        let definition = client.at("textDocument/definition", &uri, 4, 8).await;
+        assert_eq!(
+            definition[0]["range"]["start"],
+            serde_json::json!({"line": 2, "character": 1})
+        );
+    }
+
+    #[tokio::test]
+    async fn lsp_references_include_both_local_declarations_but_not_comments() {
+        let tmp = Temp::new_dir().unwrap();
+        let text = r#"
+# before
+@  id = old # note
+# @id = ignored
+@id = new
+
+GET /{{id}}
+"#
+        .replace('\n', "\r\n");
+        let (uri, mut client) = open_request(&tmp, &text).await;
+
+        let references = client.references(&uri, 6, 8, true).await;
+        for line in [2, 4] {
+            assert!(references
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|reference| { reference["range"]["start"]["line"] == line }));
+        }
+        assert!(!references
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|reference| { reference["range"]["start"]["line"] == 3 }));
+    }
+
+    #[tokio::test]
+    async fn lsp_hover_prefers_target_over_local_config_global() {
+        let tmp = Temp::new_dir().unwrap();
+        fs::write(
+            tmp.join("hitman.toml"),
+            r#"
+[dev]
+url = 'target'
+"#,
+        )
+        .unwrap();
+        fs::write(tmp.join("hitman.local.toml"), "url = 'global-local'").unwrap();
+        fs::write(tmp.join(".hitman-target"), "dev").unwrap();
+        let (uri, mut client) = open_request(&tmp, "GET {{url}}").await;
+
+        assert_eq!(
+            client.at("textDocument/hover", &uri, 0, 7).await["contents"],
+            "`target`"
+        );
+    }
+
+    #[tokio::test]
+    async fn lsp_definition_prefers_target_over_local_config_global() {
+        let tmp = Temp::new_dir().unwrap();
+        fs::write(
+            tmp.join("hitman.toml"),
+            r#"
+[dev]
+url = 'target'
+"#,
+        )
+        .unwrap();
+        fs::write(tmp.join("hitman.local.toml"), "url = 'global-local'").unwrap();
+        fs::write(tmp.join(".hitman-target"), "dev").unwrap();
+        let (uri, mut client) = open_request(&tmp, "GET {{url}}").await;
+
+        let definition = client.at("textDocument/definition", &uri, 0, 7).await;
+        assert_eq!(
+            definition[0]["uri"],
+            serde_json::json!(Url::from_file_path(tmp.join("hitman.toml")).unwrap())
+        );
+        assert_eq!(
+            definition[0]["range"]["start"],
+            serde_json::json!({"line": 2, "character": 0})
+        );
+    }
+
+    #[tokio::test]
+    async fn lsp_references_include_overridden_global_config() {
+        let tmp = Temp::new_dir().unwrap();
+        fs::write(
+            tmp.join("hitman.toml"),
+            r#"
+[dev]
+url = 'target'
+"#,
+        )
+        .unwrap();
+        fs::write(tmp.join("hitman.local.toml"), "url = 'global-local'").unwrap();
+        fs::write(tmp.join(".hitman-target"), "dev").unwrap();
+        let (uri, mut client) = open_request(&tmp, "GET {{url}}").await;
+
+        let refs = client.references(&uri, 0, 7, true).await;
+        assert!(refs
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|reference| reference["uri"]
+                == serde_json::json!(Url::from_file_path(tmp.join("hitman.local.toml")).unwrap())));
+    }
+
+    #[tokio::test]
+    async fn lsp_definition_navigates_to_all_effective_array_table_headers() {
+        let tmp = Temp::new_dir().unwrap();
+        fs::write(
+            tmp.join("hitman.toml"),
+            r#"
+[[label]]
+value = "bug"
+
+[[label]]
+value = "documentation"
+"#,
+        )
+        .unwrap();
+        let (uri, mut client) = open_request(
+            &tmp,
+            r#""labels": ["{{ label | select_multiple | join('", "') }}"]"#,
+        )
+        .await;
+
+        let definitions = client.at("textDocument/definition", &uri, 0, 17).await;
+        let definitions = definitions.as_array().unwrap();
+        assert_eq!(definitions.len(), 2);
+        let config_uri = Url::from_file_path(tmp.join("hitman.toml")).unwrap();
+        for (definition, line) in definitions.iter().zip([1, 4]) {
+            assert_eq!(definition["uri"], serde_json::json!(config_uri));
+            assert_eq!(
+                definition["range"]["start"],
+                serde_json::json!({"line": line, "character": 2})
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn lsp_definition_uses_only_effective_array_table_headers() {
+        let tmp = Temp::new_dir().unwrap();
+        fs::write(
+            tmp.join("hitman.toml"),
+            r#"[[label]]
+value = 'global'
+"#,
         )
         .unwrap();
         fs::write(
             tmp.join("hitman.local.toml"),
-            "[dev]\nurl = \"local-dev\"\n",
+            r#"[[label]]
+value = 'local-a'
+
+[[label]]
+value = 'local-b'
+"#,
         )
         .unwrap();
-        fs::write(tmp.join(".hitman-target"), "dev").unwrap();
-        fs::write(tmp.join(".hitman-data.toml"), "token = \"data-token\"\n").unwrap();
-        fs::write(
-            tmp.join("query.graphql"),
-            "query { field(arg: \"{{url}}\") }",
-        )
-        .unwrap();
+        let (uri, mut client) = open_request(&tmp, "GET {{label}}").await;
 
-        let request = tmp.join("request.http");
-        let text = "GET {{url}}\nPOST {{base_url}}/repos\nAuthorization: Bearer {{token}}\nGRPC {{target_only}}/addsvc.Add/Sum\n".to_string();
-        fs::write(&request, &text).unwrap();
-
-        (tmp, request, text)
-    }
-
-    #[test]
-    fn offers_action_for_current_grpc_method() {
-        let (_tmp, request, text) = grpc_fixture();
-        let uri = Url::from_file_path(request).unwrap();
-
-        let actions = code_actions_for_document(&uri, &text).unwrap();
-
-        assert_eq!(actions.len(), 2);
-        let CodeActionOrCommand::CodeAction(action) = &actions[0] else {
-            panic!("expected code action");
-        };
-        assert_eq!(action.title, "Generate message template");
-        assert_eq!(
-            action.command.as_ref().unwrap().command,
-            "hitman.setGrpcMethod"
-        );
-        let CodeActionOrCommand::CodeAction(action) = &actions[1] else {
-            panic!("expected code action");
-        };
-        assert_eq!(action.title, "Select gRPC method");
-        assert_eq!(
-            action.command.as_ref().unwrap().command,
-            "hitman.selectGrpcMethod"
-        );
-        assert_eq!(
-            action.command.as_ref().unwrap().arguments.as_ref().unwrap()[0]["methods"]
-                .as_array()
-                .unwrap()
-                .len(),
-            2
-        );
-    }
-
-    #[test]
-    fn offers_single_picker_action_without_current_method() {
-        let (_tmp, request, _) = grpc_fixture();
-        let text = "GRPC grpcb.in:9001/addsvc.Add\nProtoset: ./protoset.bin\n";
-        fs::write(&request, text).unwrap();
-        let uri = Url::from_file_path(request).unwrap();
-
-        let actions = code_actions_for_document(&uri, text).unwrap();
-
-        assert_eq!(actions.len(), 1);
-        let CodeActionOrCommand::CodeAction(action) = &actions[0] else {
-            panic!("expected code action");
-        };
-        assert_eq!(action.title, "Select gRPC method");
-        assert_eq!(
-            action.command.as_ref().unwrap().command,
-            "hitman.selectGrpcMethod"
-        );
-        assert_eq!(
-            action.command.as_ref().unwrap().arguments.as_ref().unwrap()[0]["methods"]
-                .as_array()
-                .unwrap()
-                .len(),
-            2
-        );
-    }
-
-    #[test]
-    fn creates_workspace_edit_for_message_template() {
-        let (_tmp, request, text) = grpc_fixture();
-        let uri = Url::from_file_path(request).unwrap();
-
-        let edit = set_grpc_method_edit(&uri, &text, "addsvc.Add.Sum", &[]).unwrap();
-        let changes = edit.changes.unwrap();
-        let edit = &changes[&uri][1];
-
-        assert_eq!(edit.range.start.line, 3);
-        assert_eq!(edit.new_text, "{\n  \"a\": 0,\n  \"b\": 0\n}");
-    }
-
-    #[test]
-    fn inserts_blank_line_before_new_message_body() {
-        let (_tmp, request, _) = grpc_fixture();
-        let text = "GRPC grpcb.in:9001/addsvc.Add/Sum\nProtoset: ./protoset.bin\n";
-        fs::write(&request, text).unwrap();
-        let uri = Url::from_file_path(request).unwrap();
-
-        let edit = set_grpc_method_edit(&uri, text, "addsvc.Add.Sum", &[]).unwrap();
-        let changes = edit.changes.unwrap();
-        let edit = &changes[&uri][1];
-
-        assert_eq!(edit.range.start.line, 2);
-        assert_eq!(edit.new_text, "\n{\n  \"a\": 0,\n  \"b\": 0\n}");
-    }
-
-    #[test]
-    fn offers_single_message_template_action_for_oneof_choices() {
-        let (_tmp, request, text) = grpc_oneof_fixture();
-        let uri = Url::from_file_path(request).unwrap();
-
-        let actions = code_actions_for_document(&uri, &text).unwrap();
-
-        assert_eq!(actions.len(), 2);
-        let titles: Vec<_> = actions
-            .iter()
-            .map(|action| match action {
-                CodeActionOrCommand::CodeAction(action) => action.title.as_str(),
-                CodeActionOrCommand::Command(_) => {
-                    panic!("expected code action")
-                }
-            })
-            .collect();
-        assert_eq!(
-            titles,
-            vec!["Generate message template", "Select gRPC method"]
-        );
-
-        let CodeActionOrCommand::CodeAction(action) = &actions[0] else {
-            panic!("expected code action");
-        };
-        let args = &action.command.as_ref().unwrap().arguments.as_ref().unwrap()[0];
-        assert_eq!(
-            action.command.as_ref().unwrap().command,
-            "hitman.setGrpcMethod"
-        );
-        assert_eq!(args["method"], "petstore.Pets.Adopt");
-        assert!(args.get("oneofs").is_none());
-    }
-
-    #[test]
-    fn finds_next_message_template_oneof_choice() {
-        let (_tmp, request, text) = grpc_oneof_fixture();
-        let uri = Url::from_file_path(request).unwrap();
-
-        let choice =
-            template_choice_for_method(&uri, &text, "petstore.Pets.Adopt", &HashMap::new())
-                .unwrap()
-                .unwrap();
-
-        assert_eq!(choice.oneof, "petstore.AdoptRequest.pet");
-        assert_eq!(choice.oneof_label, "pet");
-        assert_eq!(choice.options.len(), 2);
-        assert_eq!(choice.options[0].field_label, "cat");
-        assert_eq!(choice.options[1].field_label, "dog");
-    }
-
-    #[test]
-    fn finds_nested_message_template_oneof_choice_after_parent_selection() {
-        let (_tmp, request, text) = grpc_oneof_fixture();
-        let uri = Url::from_file_path(request).unwrap();
-        let selections =
-            HashMap::from([("petstore.AdoptRequest.pet".to_string(), "cat".to_string())]);
-
-        let choice = template_choice_for_method(&uri, &text, "petstore.Pets.Adopt", &selections)
-            .unwrap()
-            .unwrap();
-
-        assert_eq!(choice.oneof, "petstore.Cat.toy");
-        assert_eq!(choice.oneof_label, "toy");
-        assert_eq!(choice.options.len(), 2);
-        assert_eq!(choice.options[0].field_label, "ball");
-        assert_eq!(choice.options[1].field_label, "mouse");
-    }
-
-    #[test]
-    fn creates_message_template_for_selected_oneof_choice() {
-        let (_tmp, request, text) = grpc_oneof_fixture();
-        let uri = Url::from_file_path(request).unwrap();
-
-        let edit = set_grpc_method_edit(
-            &uri,
-            &text,
-            "petstore.Pets.Adopt",
-            &[GenerateTemplateOneofArgs {
-                oneof: "petstore.AdoptRequest.pet".to_string(),
-                field: "dog".to_string(),
-            }],
-        )
-        .unwrap();
-        let changes = edit.changes.unwrap();
-        let edit = &changes[&uri][1];
-
-        assert_eq!(edit.new_text, "{\n  \"dog\": {\n    \"name\": \"\"\n  }\n}");
-    }
-
-    #[test]
-    fn creates_message_template_for_nested_oneof_choice() {
-        let (_tmp, request, text) = grpc_oneof_fixture();
-        let uri = Url::from_file_path(request).unwrap();
-
-        let edit = set_grpc_method_edit(
-            &uri,
-            &text,
-            "petstore.Pets.Adopt",
-            &[
-                GenerateTemplateOneofArgs {
-                    oneof: "petstore.AdoptRequest.pet".to_string(),
-                    field: "cat".to_string(),
-                },
-                GenerateTemplateOneofArgs {
-                    oneof: "petstore.Cat.toy".to_string(),
-                    field: "ball".to_string(),
-                },
-            ],
-        )
-        .unwrap();
-        let changes = edit.changes.unwrap();
-        let edit = &changes[&uri][1];
-
-        assert_eq!(
-            edit.new_text,
-            "{\n  \"cat\": {\n    \"ball\": {\n      \"color\": \"\"\n    },\n    \"name\": \"\"\n  }\n}"
-        );
-    }
-
-    #[test]
-    fn set_grpc_method_uses_selected_oneof_choice_for_body() {
-        let (_tmp, request, text) = grpc_oneof_fixture();
-        let uri = Url::from_file_path(request).unwrap();
-
-        let edit = set_grpc_method_edit(
-            &uri,
-            &text,
-            "petstore.Pets.Adopt",
-            &[GenerateTemplateOneofArgs {
-                oneof: "petstore.AdoptRequest.pet".to_string(),
-                field: "dog".to_string(),
-            }],
-        )
-        .unwrap();
-        let changes = edit.changes.unwrap();
-        let body_edit = &changes[&uri][1];
-
-        assert_eq!(
-            body_edit.new_text,
-            "{\n  \"dog\": {\n    \"name\": \"\"\n  }\n}"
-        );
-    }
-
-    #[test]
-    fn updates_existing_grpc_method_in_request_line() {
-        let (_tmp, request, text) = grpc_fixture();
-        let uri = Url::from_file_path(request).unwrap();
-
-        let edit = set_grpc_method_edit(&uri, &text, "addsvc.Add.Concat", &[]).unwrap();
-        let changes = edit.changes.unwrap();
-        let method_edit = &changes[&uri][0];
-        let body_edit = &changes[&uri][1];
-
-        assert_eq!(method_edit.range.start.line, 0);
-        assert_eq!(method_edit.new_text, "GRPC grpcb.in:9001/addsvc.Add/Concat");
-        assert_eq!(body_edit.range.start.line, 3);
-        assert_eq!(body_edit.new_text, "{\n  \"a\": \"\",\n  \"b\": \"\"\n}");
-    }
-
-    #[test]
-    fn appends_grpc_method_when_request_line_only_has_service() {
-        let (_tmp, request, _) = grpc_fixture();
-        let text = "GRPC grpcb.in:9001/addsvc.Add\nProtoset: ./protoset.bin\n";
-        fs::write(&request, text).unwrap();
-        let uri = Url::from_file_path(request).unwrap();
-
-        let edit = set_grpc_method_edit(&uri, text, "addsvc.Add.Concat", &[]).unwrap();
-        let changes = edit.changes.unwrap();
-        let method_edit = &changes[&uri][0];
-        let body_edit = &changes[&uri][1];
-
-        assert_eq!(method_edit.new_text, "GRPC grpcb.in:9001/addsvc.Add/Concat");
-        assert_eq!(body_edit.new_text, "\n{\n  \"a\": \"\",\n  \"b\": \"\"\n}");
-    }
-
-    #[test]
-    fn parses_execute_command_arguments() {
-        let uri = Url::parse("file:///tmp/sum.http").unwrap();
-
-        let args: SetGrpcMethodArgs = parse_command_args(vec![serde_json::json!({
-            "uri": uri,
-            "method": "addsvc.Add.Sum",
-        })])
-        .unwrap();
-
-        assert_eq!(args.uri, Url::parse("file:///tmp/sum.http").unwrap());
-        assert_eq!(args.method, "addsvc.Add.Sum");
-        assert!(args.oneofs.is_empty());
-    }
-
-    #[test]
-    fn lists_grpc_methods_for_picker() {
-        let (_tmp, request, text) = grpc_fixture();
-        let uri = Url::from_file_path(request).unwrap();
-
-        let methods = grpc_methods_for_document(&uri, &text).unwrap();
-
-        assert_eq!(
-            methods,
-            vec![
-                GrpcMethodItem {
-                    label: "Sum".to_string(),
-                    method: "addsvc.Add.Sum".to_string(),
-                },
-                GrpcMethodItem {
-                    label: "Concat".to_string(),
-                    method: "addsvc.Add.Concat".to_string(),
-                },
-            ]
-        );
-    }
-
-    #[test]
-    fn completion_offers_grpc_body_fields() {
-        let (_tmp, request, text) = grpc_completion_fixture("{\n  \n}\n");
-        let uri = Url::from_file_path(request).unwrap();
-
-        let completion = completion_for_position(&uri, &text, Position::new(4, 2))
-            .unwrap()
-            .unwrap();
-        let CompletionResponse::Array(items) = completion else {
-            panic!("expected completion array");
-        };
-        let labels = items.into_iter().map(|item| item.label).collect::<Vec<_>>();
-
-        assert_eq!(labels, vec!["userId", "state", "nested", "states"]);
-    }
-
-    #[test]
-    fn completion_omits_existing_grpc_body_fields() {
-        let (_tmp, request, text) = grpc_completion_fixture("{\n  \"state\": \"ACTIVE\",\n  \n}\n");
-        let uri = Url::from_file_path(request).unwrap();
-
-        let completion = completion_for_position(&uri, &text, Position::new(5, 2))
-            .unwrap()
-            .unwrap();
-        let CompletionResponse::Array(items) = completion else {
-            panic!("expected completion array");
-        };
-        let labels = items.into_iter().map(|item| item.label).collect::<Vec<_>>();
-
-        assert_eq!(labels, vec!["userId", "nested", "states"]);
-    }
-
-    #[test]
-    fn completion_omits_existing_grpc_body_fields_below_cursor() {
-        let (_tmp, request, text) = grpc_completion_fixture("{\n  \n  \"state\": \"ACTIVE\"\n}\n");
-        let uri = Url::from_file_path(request).unwrap();
-
-        let completion = completion_for_position(&uri, &text, Position::new(4, 2))
-            .unwrap()
-            .unwrap();
-        let CompletionResponse::Array(items) = completion else {
-            panic!("expected completion array");
-        };
-        let labels = items.into_iter().map(|item| item.label).collect::<Vec<_>>();
-
-        assert_eq!(labels, vec!["userId", "nested", "states"]);
-    }
-
-    #[test]
-    fn completion_shows_repeated_grpc_body_fields_as_arrays() {
-        let (_tmp, request, text) = grpc_completion_fixture("{\n  \n}\n");
-        let uri = Url::from_file_path(request).unwrap();
-
-        let completion = completion_for_position(&uri, &text, Position::new(4, 2))
-            .unwrap()
-            .unwrap();
-        let CompletionResponse::Array(items) = completion else {
-            panic!("expected completion array");
-        };
-        let states = items
-            .into_iter()
-            .find(|item| item.label == "states")
-            .unwrap();
-
-        assert_eq!(states.detail.as_deref(), Some("array<orders.State>"));
-        assert_eq!(states.insert_text.as_deref(), Some("\"states\": [$0]"));
-    }
-
-    #[test]
-    fn completion_inserts_grpc_body_field_name_inside_key_string() {
-        let (_tmp, request, text) = grpc_completion_fixture("{\n  \"user\n}\n");
-        let uri = Url::from_file_path(request).unwrap();
-
-        let completion = completion_for_position(&uri, &text, Position::new(4, 7))
-            .unwrap()
-            .unwrap();
-        let CompletionResponse::Array(items) = completion else {
-            panic!("expected completion array");
-        };
-        let user_id = items
-            .into_iter()
-            .find(|item| item.label == "userId")
-            .unwrap();
-
-        assert_eq!(user_id.filter_text.as_deref(), Some("\"userId\""));
-        assert_eq!(user_id.insert_text.as_deref(), Some("\"userId\": \"$0\""));
-        assert_eq!(user_id.insert_text_format, Some(InsertTextFormat::SNIPPET));
-        let Some(CompletionTextEdit::Edit(edit)) = user_id.text_edit else {
-            panic!("expected completion text edit");
-        };
-        assert_eq!(edit.range.start, Position::new(4, 2));
-        assert_eq!(edit.range.end, Position::new(4, 7));
-        assert_eq!(edit.new_text, "\"userId\": \"$0\"");
-    }
-
-    #[test]
-    fn completion_replaces_auto_paired_key_quote() {
-        let (_tmp, request, text) = grpc_completion_fixture("{\n  \"user\"\n}\n");
-        let uri = Url::from_file_path(request).unwrap();
-
-        let completion = completion_for_position(&uri, &text, Position::new(4, 7))
-            .unwrap()
-            .unwrap();
-        let CompletionResponse::Array(items) = completion else {
-            panic!("expected completion array");
-        };
-        let user_id = items
-            .into_iter()
-            .find(|item| item.label == "userId")
-            .unwrap();
-        let Some(CompletionTextEdit::Edit(edit)) = user_id.text_edit else {
-            panic!("expected completion text edit");
-        };
-
-        assert_eq!(edit.range.start, Position::new(4, 2));
-        assert_eq!(edit.range.end, Position::new(4, 8));
-        assert_eq!(edit.new_text, "\"userId\": \"$0\"");
-    }
-
-    #[test]
-    fn completion_acceptance_opens_grpc_string_field_value_quote() {
-        let (_tmp, request, text) = grpc_completion_fixture("{\n  \n}\n");
-        let uri = Url::from_file_path(request).unwrap();
-
-        let completion = completion_for_position(&uri, &text, Position::new(4, 2))
-            .unwrap()
-            .unwrap();
-        let CompletionResponse::Array(items) = completion else {
-            panic!("expected completion array");
-        };
-        let user_id = items
-            .into_iter()
-            .find(|item| item.label == "userId")
-            .unwrap();
-
-        assert_eq!(user_id.label, "userId");
-        assert_eq!(user_id.filter_text.as_deref(), Some("\"userId\""));
-        assert_eq!(user_id.insert_text.as_deref(), Some("\"userId\": \"$0\""));
-        assert_eq!(user_id.insert_text_format, Some(InsertTextFormat::SNIPPET));
-        let Some(CompletionTextEdit::Edit(edit)) = user_id.text_edit else {
-            panic!("expected completion text edit");
-        };
-        assert_eq!(edit.range.start, Position::new(4, 2));
-        assert_eq!(edit.range.end, Position::new(4, 2));
-        assert_eq!(edit.new_text, "\"userId\": \"$0\"");
-    }
-
-    #[test]
-    fn completion_retriggers_after_grpc_enum_field_acceptance() {
-        let (_tmp, request, text) = grpc_completion_fixture("{\n  \n}\n");
-        let uri = Url::from_file_path(request).unwrap();
-
-        let completion = completion_for_position(&uri, &text, Position::new(4, 2))
-            .unwrap()
-            .unwrap();
-        let CompletionResponse::Array(items) = completion else {
-            panic!("expected completion array");
-        };
-        let mut items = items.into_iter();
-        let state = items.find(|item| item.label == "state").unwrap();
-
-        let command = state.command.unwrap();
-        assert_eq!(command.title, "Suggest");
-        assert_eq!(command.command, "editor.action.triggerSuggest");
-    }
-
-    #[test]
-    fn completion_does_not_retrigger_after_grpc_string_field_acceptance() {
-        let (_tmp, request, text) = grpc_completion_fixture("{\n  \n}\n");
-        let uri = Url::from_file_path(request).unwrap();
-
-        let completion = completion_for_position(&uri, &text, Position::new(4, 2))
-            .unwrap()
-            .unwrap();
-        let CompletionResponse::Array(items) = completion else {
-            panic!("expected completion array");
-        };
-        let mut items = items.into_iter();
-        let user_id = items.find(|item| item.label == "userId").unwrap();
-
-        assert!(user_id.command.is_none());
-    }
-
-    #[test]
-    fn completion_offers_grpc_enum_variants() {
-        let (_tmp, request, text) = grpc_completion_fixture("{\n  \"state\": \"\n}\n");
-        let uri = Url::from_file_path(request).unwrap();
-
-        let completion = completion_for_position(&uri, &text, Position::new(3, 12))
-            .unwrap()
-            .unwrap();
-        let CompletionResponse::Array(items) = completion else {
-            panic!("expected completion array");
-        };
-        let labels = items.into_iter().map(|item| item.label).collect::<Vec<_>>();
-
-        assert_eq!(labels, vec!["STATE_UNSPECIFIED", "ACTIVE", "DISABLED"]);
-    }
-
-    #[test]
-    fn completion_moves_cursor_after_grpc_enum_variant_without_comma() {
-        let (_tmp, request, text) = grpc_completion_fixture("{\n  \"state\": \"\n}\n");
-        let uri = Url::from_file_path(request).unwrap();
-
-        let completion = completion_for_position(&uri, &text, Position::new(3, 12))
-            .unwrap()
-            .unwrap();
-        let CompletionResponse::Array(items) = completion else {
-            panic!("expected completion array");
-        };
-        let active = items
-            .into_iter()
-            .find(|item| item.label == "ACTIVE")
-            .unwrap();
-
-        assert_eq!(active.insert_text.as_deref(), Some("ACTIVE$0"));
-        assert_eq!(active.insert_text_format, Some(InsertTextFormat::SNIPPET));
-    }
-
-    #[test]
-    fn completion_moves_cursor_after_grpc_enum_value_closing_quote() {
-        let (_tmp, request, text) = grpc_completion_fixture("{\n  \"state\": \"\"\n}\n");
-        let uri = Url::from_file_path(request).unwrap();
-        let cursor = byte_position(
-            &text,
-            text.find("\"state\": \"").unwrap() + "\"state\": \"".len(),
-        );
-
-        let completion = completion_for_position(&uri, &text, cursor)
-            .unwrap()
-            .unwrap();
-        let CompletionResponse::Array(items) = completion else {
-            panic!("expected completion array");
-        };
-        let active = items
-            .into_iter()
-            .find(|item| item.label == "ACTIVE")
-            .unwrap();
-        let Some(CompletionTextEdit::Edit(edit)) = active.text_edit else {
-            panic!("expected completion text edit");
-        };
-
-        assert_eq!(edit.range.start, cursor);
-        assert_eq!(edit.range.end, cursor);
-        assert_eq!(edit.new_text, "ACTIVE\"$0");
-        let additional = active.additional_text_edits.unwrap();
-        assert_eq!(additional.len(), 1);
-        assert_eq!(additional[0].range.start, cursor);
-        assert_eq!(additional[0].range.end.character, cursor.character + 1);
-        assert_eq!(additional[0].new_text, "");
-    }
-
-    #[test]
-    fn completion_does_not_offer_enum_variants_after_completed_value() {
-        let (_tmp, request, text) =
-            grpc_completion_fixture("{\n  \"state\": \"ACTIVE\"\n  \"\n}\n");
-        let uri = Url::from_file_path(request).unwrap();
-
-        let completion = completion_for_position(&uri, &text, Position::new(5, 3)).unwrap();
-
-        assert!(completion.is_none());
-    }
-
-    #[test]
-    fn completion_follows_nested_grpc_messages() {
-        let (_tmp, request, text) = grpc_completion_fixture("{\n  \"nested\": {\n    \n  }\n}\n");
-        let uri = Url::from_file_path(request).unwrap();
-
-        let completion = completion_for_position(&uri, &text, Position::new(5, 4))
-            .unwrap()
-            .unwrap();
-        let CompletionResponse::Array(items) = completion else {
-            panic!("expected completion array");
-        };
-        let labels = items.into_iter().map(|item| item.label).collect::<Vec<_>>();
-
-        assert_eq!(labels, vec!["state", "note"]);
-    }
-
-    #[test]
-    fn finds_variable_before_filters() {
-        let text = r#""labels": ["{{ label | select_multiple | join('", "') }}"]"#;
-
-        let occurrences = variable_occurrences(text);
-
-        assert_eq!(occurrences.len(), 1);
-        assert_eq!(occurrences[0].key, "label");
-        assert_eq!(occurrences[0].range.start, Position::new(0, 15));
-        assert_eq!(occurrences[0].range.end, Position::new(0, 20));
-    }
-
-    #[test]
-    fn definition_supports_array_table_variables() {
-        let (tmp, _request, _) = variable_fixture();
-        let request = tmp.join("create_issue.http");
-        let text = r#""labels": ["{{ label | select_multiple | join('", "') }}"]"#;
-        fs::write(&request, text).unwrap();
-        let uri = Url::from_file_path(request).unwrap();
-
-        let definitions = definition_for_position(&uri, text, Position::new(0, 17))
-            .unwrap()
-            .unwrap();
-
+        let definitions = client.at("textDocument/definition", &uri, 0, 7).await;
+        let definitions = definitions.as_array().unwrap();
         assert_eq!(definitions.len(), 2);
-        assert!(definitions.iter().all(|definition| {
-            definition.uri == Url::from_file_path(tmp.join("hitman.toml")).unwrap()
-        }));
-        assert_eq!(definitions[0].range.start, Position::new(11, 2));
-        assert_eq!(definitions[1].range.start, Position::new(15, 2));
+        let local_uri = Url::from_file_path(tmp.join("hitman.local.toml")).unwrap();
+        for (definition, line) in definitions.iter().zip([0, 3]) {
+            assert_eq!(definition["uri"], serde_json::json!(local_uri));
+            assert_eq!(
+                definition["range"]["start"],
+                serde_json::json!({"line": line, "character": 2})
+            );
+        }
     }
 
-    #[test]
-    fn definition_returns_all_config_declarations() {
-        let (tmp, request, text) = variable_fixture();
-        let uri = Url::from_file_path(request).unwrap();
-
-        let definitions = definition_for_position(&uri, &text, Position::new(0, 7))
-            .unwrap()
-            .unwrap();
-
-        assert_eq!(definitions.len(), 3);
-        assert!(definitions.iter().any(|definition| {
-            definition.uri == Url::from_file_path(tmp.join("hitman.toml")).unwrap()
-                && definition.range.start == Position::new(0, 0)
-        }));
-        assert!(definitions.iter().any(|definition| {
-            definition.uri == Url::from_file_path(tmp.join("hitman.toml")).unwrap()
-                && definition.range.start == Position::new(4, 0)
-        }));
-        assert!(definitions.iter().any(|definition| {
-            definition.uri == Url::from_file_path(tmp.join("hitman.local.toml")).unwrap()
-                && definition.range.start == Position::new(1, 0)
-        }));
-    }
-
-    #[test]
-    fn definition_finds_oauth_managed_variable() {
+    #[tokio::test]
+    async fn lsp_references_include_all_array_table_headers() {
         let tmp = Temp::new_dir().unwrap();
         fs::write(
             tmp.join("hitman.toml"),
-            "[_oauth.github_access_token]\nflow = \"client_credentials\"\ntoken_url = \"https://example.com/token\"\nclient_id = \"client\"\n",
+            r#"
+[[label]]
+value = "bug"
+
+[[label]]
+value = "documentation"
+"#,
         )
         .unwrap();
-        let request = tmp.join("request.http");
-        let text = "GET https://example.com\nAuthorization: Bearer {{github_access_token}}\n";
-        fs::write(&request, text).unwrap();
-        let uri = Url::from_file_path(request).unwrap();
+        let (uri, mut client) = open_request(
+            &tmp,
+            r#""labels": ["{{ label | select_multiple | join('", "') }}"]"#,
+        )
+        .await;
 
-        let definitions = definition_for_position(&uri, text, Position::new(1, 30))
-            .unwrap()
-            .unwrap();
-
-        assert_eq!(definitions.len(), 1);
-        assert_eq!(
-            definitions[0].uri,
-            Url::from_file_path(tmp.join("hitman.toml")).unwrap()
-        );
-        assert_eq!(definitions[0].range.start, Position::new(0, 8));
+        let refs = client.references(&uri, 0, 17, true).await;
+        for line in [1, 4] {
+            assert!(refs
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|reference| reference["range"]["start"]
+                    == serde_json::json!({"line": line, "character": 2})));
+        }
     }
 
-    #[test]
-    fn definition_returns_config_and_data_declarations() {
-        let (tmp, request, text) = variable_fixture();
-        let uri = Url::from_file_path(request).unwrap();
-
-        let definitions = definition_for_position(&uri, &text, Position::new(2, 25))
-            .unwrap()
-            .unwrap();
-
-        assert_eq!(definitions.len(), 2);
-        assert!(definitions.iter().any(|definition| {
-            definition.uri == Url::from_file_path(tmp.join("hitman.toml")).unwrap()
-                && definition.range.start == Position::new(1, 0)
-        }));
-        assert!(definitions.iter().any(|definition| {
-            definition.uri == Url::from_file_path(tmp.join(".hitman-data.toml")).unwrap()
-                && definition.range.start == Position::new(0, 0)
-        }));
-    }
-
-    #[test]
-    fn definition_ignores_other_targets() {
-        let (tmp, request, text) = variable_fixture();
-        let uri = Url::from_file_path(request).unwrap();
-
-        let definitions = definition_for_position(&uri, &text, Position::new(1, 9))
-            .unwrap()
-            .unwrap();
-
-        assert_eq!(definitions.len(), 1);
-        assert_eq!(
-            definitions[0].uri,
-            Url::from_file_path(tmp.join("hitman.toml")).unwrap()
-        );
-        assert_eq!(definitions[0].range.start, Position::new(5, 0));
-    }
-
-    #[test]
-    fn hover_is_empty_for_multiple_declarations() {
-        let (_tmp, request, text) = variable_fixture();
-        let uri = Url::from_file_path(request).unwrap();
-
-        let hover = hover_for_position(&uri, &text, Position::new(0, 7)).unwrap();
-
-        assert!(hover.is_none());
-    }
-
-    #[test]
-    fn hover_shows_value_for_single_declaration() {
-        let (_tmp, request, text) = variable_fixture();
-        let uri = Url::from_file_path(request).unwrap();
-
-        let hover = hover_for_position(&uri, &text, Position::new(3, 8))
-            .unwrap()
-            .unwrap();
-
-        let HoverContents::Scalar(MarkedString::String(contents)) = hover.contents else {
-            panic!("expected string hover");
-        };
-        assert_eq!(contents, "`dev-only`");
-    }
-
-    #[test]
-    fn local_variable_definition_and_hover_use_http_declaration() {
+    #[tokio::test]
+    async fn lsp_definition_finds_oauth_profile() {
         let tmp = Temp::new_dir().unwrap();
-        let request = tmp.join("request.http");
-        let text =
-            "@base_url = https://example.com # API endpoint\n\nGET {{base_url}}/users HTTP/1.1\n";
-        fs::write(&request, text).unwrap();
-        let uri = Url::from_file_path(&request).unwrap();
-
-        let definitions = definition_for_position(&uri, text, Position::new(2, 8))
-            .unwrap()
-            .unwrap();
-        assert_eq!(definitions.len(), 1);
-        assert_eq!(definitions[0].uri, uri);
-        assert_eq!(definitions[0].range.start, Position::new(0, 1));
-        assert_eq!(definitions[0].range.end, Position::new(0, 9));
-
-        let hover = hover_for_position(&uri, text, Position::new(2, 8))
-            .unwrap()
-            .unwrap();
-        let HoverContents::Scalar(MarkedString::String(contents)) = hover.contents else {
-            panic!("expected string hover");
-        };
-        assert_eq!(contents, "`https://example.com`");
+        fs::write(
+            tmp.join("hitman.toml"),
+            r#"[_oauth.github_access_token]
+flow = 'client_credentials'
+"#,
+        )
+        .unwrap();
+        let (uri, mut client) = open_request(
+            &tmp,
+            r#"GET /
+Authorization: Bearer {{github_access_token}}
+"#,
+        )
+        .await;
+        let definition = client.at("textDocument/definition", &uri, 1, 30).await;
+        assert_eq!(
+            definition[0]["range"]["start"],
+            serde_json::json!({"line": 0, "character": 8})
+        );
     }
 
-    #[test]
-    fn hover_uses_current_target() {
-        let (_tmp, request, text) = variable_fixture();
+    #[tokio::test]
+    async fn lsp_reports_diagnostics_and_clears_them_after_edit() {
+        let (_tmp, request, text) = grpc_fixture();
         let uri = Url::from_file_path(request).unwrap();
-
-        let hover = hover_for_position(&uri, &text, Position::new(1, 9))
+        let mut client = LspTestClient::start().await;
+        let invalid = text.replace("/Sum", "/Missing");
+        let diagnostics = client.open(&uri, &invalid).await;
+        assert!(diagnostics["diagnostics"]
+            .as_array()
             .unwrap()
-            .unwrap();
+            .iter()
+            .any(|diagnostic| { diagnostic["message"].as_str().unwrap().contains("Missing") }));
 
-        let HoverContents::Scalar(MarkedString::String(contents)) = hover.contents else {
-            panic!("expected string hover");
-        };
-        assert_eq!(contents, "`https://dev.example.com`");
+        let diagnostics = client.change(&uri, &text).await;
+        assert_eq!(diagnostics["diagnostics"], serde_json::json!([]));
     }
 
-    #[test]
-    fn references_include_http_graphql_and_declarations() {
-        let (tmp, request, text) = variable_fixture();
+    #[tokio::test]
+    async fn lsp_accepts_a_request_with_a_leading_blank_line() {
+        let (_tmp, request, _) = grpc_fixture();
         let uri = Url::from_file_path(request).unwrap();
+        let text = r#"
+GRPC grpcb.in:9001/addsvc.Add/Sum
+Protoset: ./protoset.bin
 
-        let references = references_for_position(&uri, &text, Position::new(0, 7), true)
+{}
+"#;
+        let mut client = LspTestClient::start().await;
+        let diagnostics = client.open(&uri, text).await;
+        assert_eq!(diagnostics["diagnostics"], serde_json::json!([]));
+
+        let actions = client
+            .request(
+                "textDocument/codeAction",
+                serde_json::json!({
+                    "textDocument": {"uri": uri},
+                    "range": {"start": {"line": 1, "character": 0}, "end": {"line": 1, "character": 0}},
+                    "context": {"diagnostics": []}
+                }),
+            )
+            .await;
+        assert_eq!(actions[0]["title"], "Generate message template");
+    }
+
+    #[tokio::test]
+    async fn lsp_offers_grpc_code_actions() {
+        let (tmp, _request, text) = grpc_fixture();
+        let (uri, mut client) = open_request(&tmp, &text).await;
+
+        let actions = client.request("textDocument/codeAction", serde_json::json!({
+            "textDocument": {"uri": uri},
+            "range": {"start": {"line": 0, "character": 0}, "end": {"line": 0, "character": 0}},
+            "context": {"diagnostics": []}
+        })).await;
+        assert_eq!(actions[0]["title"], "Generate message template");
+        assert_eq!(actions[1]["title"], "Select gRPC method");
+    }
+
+    #[tokio::test]
+    async fn lsp_lists_grpc_methods() {
+        let (tmp, _request, text) = grpc_fixture();
+        let (uri, mut client) = open_request(&tmp, &text).await;
+
+        let methods = client
+            .request(
+                "workspace/executeCommand",
+                serde_json::json!({
+                    "command": LIST_GRPC_METHODS, "arguments": [{"uri": uri}]
+                }),
+            )
+            .await;
+        assert_eq!(methods.as_array().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn lsp_completes_grpc_method_names() {
+        let (tmp, _request, _) = grpc_fixture();
+        let partial = r#"
+GRPC grpcb.in:9001/addsvc.Add/
+Protoset: ./protoset.bin
+"#;
+        let (uri, mut client) = open_request(&tmp, partial).await;
+
+        let items = client
+            .at(
+                "textDocument/completion",
+                &uri,
+                1,
+                partial.lines().nth(1).unwrap().len() as u32,
+            )
+            .await;
+        assert!(items
+            .as_array()
             .unwrap()
-            .unwrap();
+            .iter()
+            .any(|item| item["label"] == "Sum"));
+        assert!(items
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["label"] == "Concat"));
+    }
 
-        assert!(references.iter().any(|location| location.uri == uri));
-        assert!(references.iter().any(|location| {
-            location.uri == Url::from_file_path(tmp.join("query.graphql")).unwrap()
-        }));
-        assert!(references.iter().any(|location| {
-            location.uri == Url::from_file_path(tmp.join("hitman.local.toml")).unwrap()
+    #[tokio::test]
+    async fn lsp_completes_grpc_body_fields() {
+        let (_tmp, request, text) = grpc_completion_fixture(
+            r#"{
+
+}
+"#,
+        );
+        let uri = Url::from_file_path(request).unwrap();
+        let mut client = LspTestClient::start().await;
+        client.open(&uri, &text).await;
+
+        let fields = client.at("textDocument/completion", &uri, 4, 0).await;
+        for field in ["userId", "state", "nested", "states"] {
+            assert!(fields
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|item| item["label"] == field));
+        }
+    }
+
+    #[tokio::test]
+    async fn lsp_completes_grpc_enum_values() {
+        let (_tmp, request, text) = grpc_completion_fixture(
+            r#"{
+  "state": ""
+}
+"#,
+        );
+        let uri = Url::from_file_path(request).unwrap();
+        let mut client = LspTestClient::start().await;
+        client.open(&uri, &text).await;
+        let values = client.at("textDocument/completion", &uri, 4, 12).await;
+        assert!(values
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["label"] == "ACTIVE"));
+    }
+
+    #[tokio::test]
+    async fn lsp_lists_oneof_template_choices() {
+        let (tmp, _request, text) = grpc_oneof_fixture();
+        let (uri, mut client) = open_request(&tmp, &text).await;
+
+        let choice = client
+            .request(
+                "workspace/executeCommand",
+                serde_json::json!({
+                    "command": NEXT_TEMPLATE_CHOICE,
+                    "arguments": [{"uri": uri, "method": "petstore.Pets.Adopt"}]
+                }),
+            )
+            .await;
+        assert_eq!(choice["oneof"], "petstore.AdoptRequest.pet");
+        assert_eq!(choice["options"].as_array().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn lsp_lists_nested_oneof_template_choices() {
+        let (tmp, _request, text) = grpc_oneof_fixture();
+        let (uri, mut client) = open_request(&tmp, &text).await;
+
+        let nested = client
+            .request(
+                "workspace/executeCommand",
+                serde_json::json!({
+                    "command": NEXT_TEMPLATE_CHOICE,
+                    "arguments": [{"uri": uri, "method": "petstore.Pets.Adopt", "oneofs": [
+                        {"oneof": "petstore.AdoptRequest.pet", "field": "cat"}
+                    ]}]
+                }),
+            )
+            .await;
+        assert_eq!(nested["oneof"], "petstore.Cat.toy");
+    }
+
+    #[tokio::test]
+    async fn lsp_applies_grpc_message_template_edit() {
+        let (_tmp, request, text) = grpc_fixture();
+        let uri = Url::from_file_path(request).unwrap();
+        let mut client = LspTestClient::start().await;
+        client.open(&uri, &text).await;
+
+        client
+            .request(
+                "workspace/executeCommand",
+                serde_json::json!({
+                    "command": SET_GRPC_METHOD,
+                    "arguments": [{"uri": uri, "method": "addsvc.Add.Sum"}]
+                }),
+            )
+            .await;
+        let edits = &client.applied_edit.as_ref().unwrap()["changes"][uri.as_str()];
+        assert!(edits.as_array().unwrap().iter().any(|edit| {
+            edit["newText"]
+                == r#"{
+  "a": 0,
+  "b": 0
+}"#
         }));
     }
 }

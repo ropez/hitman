@@ -1,6 +1,7 @@
 pub mod env;
 pub mod extract;
 pub mod flurry;
+pub mod http_file;
 pub mod monitor;
 pub mod oauth;
 pub mod request;
